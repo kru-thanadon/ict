@@ -1,0 +1,147 @@
+/* Container ครอบทั้งหน้าจอ */
+.snow-stars-background {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    /* อยู่หลังสุด */
+    overflow: hidden;
+    pointer-events: none;
+}
+
+/* ลักษณะเม็ดดาว/หิมะ */
+.snow-star {
+    position: absolute;
+    top: -10px;
+    /* เริ่มจากนอกจอด้านบน */
+    width: 4px;
+    height: 4px;
+    background: white;
+    border-radius: 50%;
+    filter: blur(1px);
+    /* ทำให้ดูฟุ้งๆ เหมือนแสงดาว */
+    box-shadow: 0 0 10px white;
+    animation: fall linear infinite;
+    opacity: 0;
+}
+
+/* สุ่มตำแหน่ง ความเร็ว และขนาด */
+.snow-star:nth-child(1) {
+    left: 5%;
+    animation-duration: 8s;
+    animation-delay: 0s;
+    width: 3px;
+    height: 3px;
+}
+
+.snow-star:nth-child(2) {
+    left: 15%;
+    animation-duration: 12s;
+    animation-delay: 2s;
+    width: 5px;
+    height: 5px;
+}
+
+.snow-star:nth-child(3) {
+    left: 25%;
+    animation-duration: 10s;
+    animation-delay: 5s;
+    width: 2px;
+    height: 2px;
+}
+
+.snow-star:nth-child(4) {
+    left: 35%;
+    animation-duration: 15s;
+    animation-delay: 1s;
+    width: 4px;
+    height: 4px;
+}
+
+.snow-star:nth-child(5) {
+    left: 45%;
+    animation-duration: 9s;
+    animation-delay: 3s;
+    width: 3px;
+    height: 3px;
+}
+
+.snow-star:nth-child(6) {
+    left: 55%;
+    animation-duration: 11s;
+    animation-delay: 0.5s;
+    width: 6px;
+    height: 6px;
+}
+
+.snow-star:nth-child(7) {
+    left: 65%;
+    animation-duration: 14s;
+    animation-delay: 4s;
+    width: 2px;
+    height: 2px;
+}
+
+.snow-star:nth-child(8) {
+    left: 75%;
+    animation-duration: 10s;
+    animation-delay: 6s;
+    width: 4px;
+    height: 4px;
+}
+
+.snow-star:nth-child(9) {
+    left: 85%;
+    animation-duration: 13s;
+    animation-delay: 2.5s;
+    width: 3px;
+    height: 3px;
+}
+
+.snow-star:nth-child(10) {
+    left: 95%;
+    animation-duration: 8s;
+    animation-delay: 1.2s;
+    width: 5px;
+    height: 5px;
+}
+
+.snow-star:nth-child(11) {
+    left: 20%;
+    animation-duration: 16s;
+    animation-delay: 7s;
+    width: 2px;
+    height: 2px;
+}
+
+.snow-star:nth-child(12) {
+    left: 80%;
+    animation-duration: 12s;
+    animation-delay: 3.5s;
+    width: 4px;
+    height: 4px;
+}
+
+/* อนิเมชั่นการร่วง */
+@keyframes fall {
+    0% {
+        transform: translateY(0);
+        opacity: 0;
+    }
+
+    10% {
+        opacity: 0.8;
+    }
+
+    90% {
+        opacity: 0.8;
+    }
+
+    100% {
+        transform: translateY(105vh);
+        /* ร่วงลงไปจนเลยขอบล่าง */
+        opacity: 0;
+    }
+}

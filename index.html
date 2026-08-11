@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base target="_top">
+  <link rel="icon" type="image/x-icon" href="images/logo_ict.png">
+  <title>ICT โรงเรียนบางละมุง</title>
+  <!-- Google Fonts: Outfit and Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet">
+  <!-- FontAwesome Icons via CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- CSS -->
+  <link rel="stylesheet" href="./style.css">
+
+  <!-- Flatpickr CSS & Dark Theme เพื่อความกลมกลืนกับธีมเว็บแอป -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+  <!-- Flatpickr JS & โลคอลภาษาไทย -->
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/th.js"></script>
+</head>
+
+<body>
+  <div class="app-container">
+
+    <!-- ส่วนแผงควบคุมทางซ้าย (Sidebar) -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">
+          <img src="https://raw.githubusercontent.com/blm-school/ict/refs/heads/main/images/blm-logo-250px-2.png"
+            style="width: 70px;">
+        </div>
+        <div>
+          <h1>ปฏิทินกิจกรรม ICT</h1>
+          <div style="padding-top: 5px;">
+            <p>ศูนย์เทคโนโลยีสารสนเทศ</p>
+            <p>และการสื่อสาร โรงเรียนบางละมุง</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ปุ่มสลับโหมดสี -->
+      <button id="theme-toggle-btn" onclick="toggleTheme()" class="btn-theme-toggle btn btn-sm ">
+        <i class="fa-solid fa-moon"></i> โหมดมืด
+      </button>
+
+      <!-- บล็อกแสดงสถานะ Admin -->
+      <div class="admin-badge-container">
+        <div id="admin-status" class="admin-badge admin-badge-guest">
+          <i class="fa-solid fa-circle-user"></i>
+          <span id="admin-status-text">โหมดผู้ใช้งานทั่วไป</span>
+        </div>
+        <button id="admin-action-btn" class="btn btn-secondary btn-sm ripple" onclick="openAdminModal()">
+          <i class="fa-solid fa-lock"></i> เข้าสู่ระบบ Admin
+        </button>
+      </div>
+
+      <!-- ส่วนควบคุมการนำทางวันที่ในปฏิทิน -->
+      <div class="sidebar-section">
+        <h3><i class="fa-solid fa-compass"></i> นำทาง</h3>
+        <div class="navigation-controls">
+          <button class="btn btn-icon ripple" onclick="navigateCalendar(-1)" title="ก่อนหน้า">
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <button class="btn btn-text ripple" onclick="navigateToday()">วันนี้</button>
+          <button class="btn btn-icon ripple" onclick="navigateCalendar(1)" title="ถัดไป">
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
+        <div class="current-view-indicator" id="sidebar-month-display">...</div>
+      </div>
+
+      <!-- ช่องค้นหาข้อมูล -->
+      <div class="sidebar-section">
+        <h3><i class="fa-solid fa-magnifying-glass"></i> ค้นหากิจกรรม</h3>
+        <div class="search-box">
+          <input type="text" id="search-input" placeholder="พิมพ์ชื่อกิจกรรม หรือผู้จัด..."
+            oninput="handleSearchFilter()">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        </div>
+      </div>
+
+      <!-- แผงเลือกตัวกรองหมวดหมู่กิจกรรม -->
+      <div class="sidebar-section">
+        <h3><i class="fa-solid fa-tags"></i> กรองประเภทงาน</h3>
+        <div class="filter-list">
+          <label class="filter-item">
+            <input type="checkbox" class="category-filter-checkbox" value="ถ่ายภาพ" checked onchange="filterEvents()">
+            <span class="category-indicator cat-photo"></span>
+            <span>ถ่ายภาพ</span>
+          </label>
+          <label class="filter-item">
+            <input type="checkbox" class="category-filter-checkbox" value="ถ่ายวิดีโอ" checked
+              onchange="filterEvents()">
+            <span class="category-indicator cat-video"></span>
+            <span>ถ่ายวิดีโอ</span>
+          </label>
+          <label class="filter-item">
+            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(ห้องเฟื่องฟ้า)" checked
+              onchange="filterEvents()">
+            <span class="category-indicator cat-audio-ff"></span>
+            <span>เครื่องเสียง(ห้องเฟื่องฟ้า)</span>
+          </label>
+          <label class="filter-item">
+            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(อบจ)" checked
+              onchange="filterEvents()">
+            <span class="category-indicator cat-audio-obj"></span>
+            <span>เครื่องเสียง(อบจ)</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <p>&copy; 2026 ICT BANGLAMUNG</p>
+        <p>ศูนย์เทคโนโลยีสารสนเทศและการสื่อสาร โรงเรียนบางละมุง</p>
+      </div>
+    </aside>
+
+    <!-- ส่วนเนื้อหาปฏิทินหลัก (Main Workspace) -->
+    <main class="main-content">
+
+      <!-- ปุ่มหลักเพิ่มกิจกรรม -->
+      <div class="calendar-viewport">
+        <button class="btn btn-block btn-large admin-badge-logged" onclick="openAddEventModal()">
+          <i class="fa-solid fa-plus"></i> เพิ่มกิจกรรมใหม่
+        </button>
+
+        <!-- ==========================================
+             แดชบอร์ดสรุปงานด้านล่าง (Dashboard Section)
+             ========================================== -->
+        <section class="dashboard-container">
+          <div class="dashboard-header">
+            <h3><i class="fa-solid fa-chart-simple"></i> แดชบอร์ดสรุปกิจกรรม</h3>
+          </div>
+
+          <div class="stats-grid">
+            <!-- การ์ด 1: สรุปงานทั้งหมดในเดือนนี้ -->
+            <div class="stat-card">
+              <div class="stat-icon icon-total"><i class="fa-solid fa-calendar-check"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">กิจกรรมทั้งหมดในเดือนนี้</span>
+                <span id="stat-month-total" class="stat-value">0</span>
+              </div>
+            </div>
+
+            <!-- การ์ด 2: สรุปงานเฉพาะวันนี้ -->
+            <div class="stat-card">
+              <div class="stat-icon icon-today"><i class="fa-solid fa-hourglass-half"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">กิจกรรมเฉพาะวันนี้</span>
+                <span id="stat-today-total" class="stat-value">0</span>
+              </div>
+            </div>
+
+            <!-- การ์ด 3: สรุปแยกรายประเภทประจำเดือนนี้ -->
+            <div class="stat-card stat-card-wide">
+              <div class="stat-label-categories">ประเภทกิจกรรมในเดือนนี้</div>
+              <div class="category-breakdown">
+                <div class="cat-progress-item">
+                  <span class="cat-name"><span class="cat-dot cat-photo"></span>ถ่ายภาพ</span>
+                  <span id="stat-cat-photo" class="cat-count">0</span>
+                </div>
+                <div class="cat-progress-item">
+                  <span class="cat-name"><span class="cat-dot cat-video"></span>ถ่ายวิดีโอ</span>
+                  <span id="stat-cat-video" class="cat-count">0</span>
+                </div>
+                <div class="cat-progress-item">
+                  <span class="cat-name"><span class="cat-dot cat-audio-ff"></span>เครื่องเสียง (เฟื่องฟ้า)</span>
+                  <span id="stat-cat-audio-ff" class="cat-count">0</span>
+                </div>
+                <div class="cat-progress-item">
+                  <span class="cat-name"><span class="cat-dot cat-audio-obj"></span>เครื่องเสียง (อบจ)</span>
+                  <span id="stat-cat-audio-obj" class="cat-count">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- บล็อกงานที่กำลังจะมาถึงเร็ว ๆ นี้ -->
+          <div class="upcoming-section">
+            <h4><i class="fa-solid fa-clock-rotate-left"></i> กิจกรรมประสานที่กำลังจะมาถึงเร็ว ๆ นี้</h4>
+            <div id="upcoming-list" class="upcoming-list-grid">
+              <div class="upcoming-empty">ไม่มีกิจกรรมที่กำลังจะมาถึงเร็ว ๆ นี้</div>
+            </div>
+          </div>
+        </section>
+
+        <br>
+        <hr>
+
+        <!-- ส่วนหัว เดือน สัปดาห์ (Header) -->
+        <header class="calendar-header">
+          <div class="title-section">
+            <h2 id="calendar-title-display">มิถุนายน 2569</h2>
+          </div>
+          <div class="view-switchers">
+            <button id="view-month-btn" class="btn btn-view active ripple" onclick="switchView('month')">
+              <i class="fa-solid fa-calendar-days"></i> รายเดือน
+            </button>
+            <button id="view-week-btn" class="btn btn-view ripple" onclick="switchView('week')">
+              <i class="fa-solid fa-calendar-week"></i> รายสัปดาห์
+            </button>
+          </div>
+        </header>
+        <br>
+        <!-- แถวแสดงวันจันทร์ - อาทิตย์ -->
+        <div class="weekday-header-grid">
+          <div>อาทิตย์</div>
+          <div>จันทร์</div>
+          <div>อังคาร</div>
+          <div>พุธ</div>
+          <div>พฤหัสบดี</div>
+          <div>ศุกร์</div>
+          <div>เสาร์</div>
+        </div>
+        <!-- ตารางแสดงวันและชิปกิจกรรม -->
+        <div id="calendar-grid" class="calendar-grid-days"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- หน้าต่างโหลดระบบข้อมูล (Loading Overlay) -->
+  <div id="loading-overlay" class="overlay active">
+    <div class="spinner-container">
+      <div class="spinner"></div>
+      <p class="loading-text">กำลังซิงโครไนซ์ข้อมูลระบบ...</p>
+    </div>
+  </div>
+
+  <!-- หน้าต่าง 1: เข้าสู่ระบบ Admin -->
+  <div id="admin-modal" class="modal-overlay">
+    <div class="modal-card modal-card-sm animate-scale">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-shield-halved"></i> เข้าสู่ระบบผู้ดูแลระบบ</h2>
+        <button class="modal-close" type="button" onclick="closeAdminModal()">&times;</button>
+      </div>
+      <form id="admin-login-form" onsubmit="event.preventDefault(); submitAdminPassword();">
+        <div class="modal-body">
+          <p class="modal-sub">กรุณากรอกรหัสผ่านเพื่อรับสิทธิ์ในการเพิ่ม ลบ หรือแก้ไขข้อมูลกิจกรรม</p>
+          <div class="form-group">
+            <label for="admin-password-input">รหัสผ่าน (Password)</label>
+            <input type="password" id="admin-password-input" class="form-control" placeholder="กรอกรหัสผ่าน..."
+              required>
+          </div>
+          <div id="admin-login-error" class="error-msg hidden">
+            <i class="fa-solid fa-triangle-exclamation"></i> รหัสผ่านผู้ดูแลระบบไม่ถูกต้อง
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-text ripple" onclick="closeAdminModal()">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary ripple">ยืนยัน</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- หน้าต่าง 2: รายละเอียดกิจกรรมกิจกรรม (Detail Modal) -->
+  <div id="detail-modal" class="modal-overlay">
+    <div class="modal-card animate-scale">
+      <div class="modal-header">
+        <h2 id="detail-title">หัวข้อกิจกรรม</h2>
+        <button class="modal-close" type="button" onclick="closeDetailModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="detail-section">
+          <div id="detail-categories" class="detail-badge-list"></div>
+        </div>
+
+        <div class="detail-section detail-time-box">
+          <div class="time-item">
+            <span class="time-label"><i class="fa-regular fa-calendar-check text-primary"></i> วันเวลาเริ่มต้น</span>
+            <span id="detail-start" class="time-value">-</span>
+          </div>
+          <div class="time-item">
+            <span class="time-label"><i class="fa-regular fa-calendar-xmark text-danger"></i> วันเวลาสิ้นสุด</span>
+            <span id="detail-end" class="time-value">-</span>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h3><i class="fa-solid fa-align-left text-muted"></i> รายละเอียด / ผู้ประสานงาน</h3>
+          <p id="detail-desc" class="detail-description-text">ไม่มีข้อมูลรายละเอียด</p>
+        </div>
+
+        <div class="detail-section" id="detail-attachment-section">
+          <h3><i class="fa-solid fa-paperclip text-muted"></i> ไฟล์เอกสารหรือภาพประกอบแนบ</h3>
+          <div id="detail-file-preview" class="file-preview-card"></div>
+        </div>
+
+        <div class="detail-meta">
+          <small class="text-muted">รหัสกิจกรรม: <span id="detail-id"></span></small>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="admin-actions">
+          <button id="admin-delete-btn" class="btn btn-danger btn-outline ripple" onclick="triggerDeleteEvent()"><i
+              class="fa-solid fa-trash-can"></i> ลบกิจกรรม</button>
+          <button id="admin-edit-btn" class="btn btn-warning ripple" onclick="triggerEditEvent()"><i
+              class="fa-solid fa-pen-to-square"></i> แก้ไขกิจกรรม</button>
+        </div>
+        <button type="button" class="btn btn-secondary ripple" onclick="closeDetailModal()">ปิดหน้าต่าง</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- หน้าต่าง 3: แบบฟอร์มเพิ่ม/แก้ไขกิจกรรม (ปรับปรุงชนิด Input เป็น text เพื่อให้ Flatpickr ควบคุมอย่างสมบูรณ์) -->
+  <div id="form-modal" class="modal-overlay">
+    <div class="modal-card modal-card-lg animate-scale">
+      <div class="modal-header">
+        <h2 id="form-title">เพิ่มกิจกรรมงานปฏิทิน</h2>
+        <button class="modal-close" type="button" onclick="closeFormModal()">&times;</button>
+      </div>
+      <form id="event-form" onsubmit="handleFormSubmit(event)">
+        <input type="hidden" id="form-event-id">
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="form-title-input">หัวข้อกิจกรรม / ชื่องานประสาน <span class="required">*</span></label>
+            <input type="text" id="form-title-input" class="form-control" placeholder="ระบุชื่องานหรือหัวข้อ..."
+              required>
+          </div>
+
+          <div class="form-group">
+            <label>ประเภทงานที่ขอรับบริการ (เลือกได้หลายข้อ) <span class="required">*</span></label>
+            <div class="category-checkboxes-grid">
+              <label class="checkbox-badge-item">
+                <input type="checkbox" name="form-categories" value="ถ่ายภาพ" class="form-category-checkbox">
+                <span class="checkbox-badge-label cat-photo-border"><i class="fa-solid fa-camera"></i> ถ่ายภาพ</span>
+              </label>
+              <label class="checkbox-badge-item">
+                <input type="checkbox" name="form-categories" value="ถ่ายวิดีโอ" class="form-category-checkbox">
+                <span class="checkbox-badge-label cat-video-border"><i class="fa-solid fa-video"></i> ถ่ายวิดีโอ</span>
+              </label>
+              <label class="checkbox-badge-item">
+                <input type="checkbox" name="form-categories" value="เครื่องเสียง(ห้องเฟื่องฟ้า)"
+                  class="form-category-checkbox">
+                <span class="checkbox-badge-label cat-audio-ff-border"><i class="fa-solid fa-volume-high"></i>
+                  เครื่องเสียง (ห้องเฟื่องฟ้า)</span>
+              </label>
+              <label class="checkbox-badge-item">
+                <input type="checkbox" name="form-categories" value="เครื่องเสียง(อบจ)" class="form-category-checkbox">
+                <span class="checkbox-badge-label cat-audio-obj-border"><i class="fa-solid fa-music"></i> เครื่องเสียง
+                  (อบจ)</span>
+              </label>
+            </div>
+            <div id="form-category-error" class="error-msg hidden">
+              <i class="fa-solid fa-circle-exclamation"></i> กรุณาเลือกประเภทบริการอย่างน้อย 1 อย่าง
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label for="form-start-input">วันที่/เวลาเริ่มต้น <span class="required">*</span></label>
+              <!-- ปรับชนิดจาก datetime-local เป็น text สำหรับปฏิทิน Flatpickr พ.ศ. -->
+              <input type="text" id="form-start-input" class="form-control" placeholder="เลือกวันเวลาเริ่มต้น..."
+                required readonly>
+            </div>
+            <div class="form-group col-6">
+              <label for="form-end-input">วันที่/เวลาสิ้นสุด <span class="required">*</span></label>
+              <!-- ปรับชนิดจาก datetime-local เป็น text สำหรับปฏิทิน Flatpickr พ.ศ. -->
+              <input type="text" id="form-end-input" class="form-control" placeholder="เลือกวันเวลาสิ้นสุด..." required
+                readonly>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="form-desc-input">เวลาเปิดงาน / รายละเอียดเพิ่มเติม / ชื่อผู้ประสานงาน</label>
+            <textarea id="form-desc-input" class="form-control" rows="3"
+              placeholder="ระบุเวลาเปิดงาน ระบุชื่อประธาน ชื่อผู้ประสานงาน และข้อมูลสำคัญเพื่อเตรียมการล่วงหน้า..."></textarea>
+          </div>
+
+          <!-- โซนการจัดการไฟล์อัปโหลด -->
+          <div class="form-group">
+            <label>แนบไฟล์ (คำสั่งราชการ / ร่างคำสั่ง / ป้ายงาน)</label>
+
+            <!-- สถานะไฟล์แนบเดิมเมื่อเลือกโหมดแก้ไข -->
+            <div id="edit-attachment-status" class="existing-file-card hidden">
+              <div class="file-icon-box">
+                <i class="fa-solid fa-file-arrow-up"></i>
+              </div>
+              <div class="file-info-text">
+                <span class="file-name-label">ตรวจพบไฟล์แนบดั้งเดิม</span>
+                <a href="#" id="edit-attachment-link" target="_blank" class="file-link-action">เปิดดูภาพเดิม</a>
+              </div>
+              <button type="button" class="btn-delete-file" onclick="markAttachmentForDeletion()" title="ลบไฟล์เดิม">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </div>
+
+            <!-- ดรอปโซนลากวางและเปิดเลือกไฟล์ -->
+            <div id="upload-dropzone" class="upload-dropzone-box">
+              <input type="file" id="form-file-input" class="file-input-hidden" onchange="handleFileSelection(event)">
+              <div class="dropzone-prompt">
+                <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
+                <p class="primary-text">กดคลิกเพื่อเลือกไฟล์ หรือลากเอาไฟล์มาวางเพื่ออัปโหลด</p>
+                <p class="secondary-text">รองรับภาพ, เอกสาร PDF และเสียง (ขนาดไฟล์ไม่เกิน 10MB)</p>
+              </div>
+
+              <div id="selected-file-display" class="selected-file-card hidden">
+                <i class="fa-solid fa-file-circle-check text-success file-status-icon" style="font-size:1.5rem"></i>
+                <div class="selected-file-meta">
+                  <span id="selected-file-name" class="file-title">filename.jpg</span>
+                  <span id="selected-file-size" class="file-size">0 KB</span>
+                </div>
+                <button type="button" class="btn-clear-selection" onclick="clearFileSelection()">&times;</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary ripple" onclick="closeFormModal()">ยกเลิก</button>
+          <button type="submit" class="btn btn-primary ripple"><i class="fa-solid fa-floppy-disk"></i>
+            บันทึกรายการ</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- โซนแจ้งเตือน Toast -->
+  <div id="toast-container" class="toast-container-box"></div>
+
+  <!-- JavaScript -->
+  <script src="./script.js"></script>
+</body>
+
+</html>
