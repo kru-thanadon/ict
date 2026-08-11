@@ -3,7 +3,7 @@
 // ==========================================================================
 
 // 🔴 นำ URL Web App ของ Google Apps Script มาใส่ที่นี่ 🔴
-const API_URL = 'https://script.google.com/macros/s/AKfycbyKGFMWUkA92MMtjCAtgCIRIXkw3gPBdPeeEC9QePWABViQAEAMQtUN9NUGLnv8zEJi2g/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbw5ufgADxQXqvm40HfAmKfoE4d5S1DvddgZ5ZgXIQwGYhFng5iKz3Ykhuvps6c1Kygt/exec';
 
 // Global Application State
 let currentDate = new Date();
