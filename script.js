@@ -548,6 +548,29 @@ function openDetailModal(eventObj) {
     timestampEl.innerText = rawTime ? formatDisplayDate(rawTime) : 'ไม่มีข้อมูล';
   }
 
+  // ดึง Element แจ้งเตือน (หรือสร้างใหม่ขึ้นมาแสดง)
+  const warningEl = document.getElementById('detail-warning-notice');
+
+  const startDateObj = parseSheetDate(eventObj['Start Date']);
+  const rawTime = eventObj.Timestamp;
+  const timestampObj = parseSheetDate(rawTime);
+
+  if (startDateObj && timestampObj) {
+    // คำนวณส่วนต่างเวลาเป็นวัน (Millisecond -> Days)
+    const diffInMs = startDateObj - timestampObj;
+    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+
+    // ถ้าห่างกันน้อยกว่า 3 วัน (หรือจองย้อนหลัง)
+    if (diffInDays < 3) {
+      if (warningEl) {
+        warningEl.innerText = '⚠️ กรุณาติดต่อล่วงหน้าอย่างน้อย 3 วัน';
+        warningEl.classList.remove('hidden');
+      }
+    } else {
+      if (warningEl) warningEl.classList.add('hidden');
+    }
+  }
+
   const badgeContainer = document.getElementById('detail-categories');
   badgeContainer.innerHTML = '';
   const categoriesList = eventObj.Categories ? eventObj.Categories.split(',').map(c => c.trim()) : [];
