@@ -360,12 +360,12 @@
           </div>
 
           <div class="form-group">
-            <label for="form-desc-input">เวลาเปิดงาน / รายละเอียดเพิ่มเติม / ชื่อผู้ประสานงาน</label>
-            <textarea id="form-desc-input" class="form-control" rows="3" placeholder="ระบุรายละเอียดเพิ่มเติม..."></textarea>
+            <label for="form-desc-input">เวลาเปิดงาน / รายละเอียดเพิ่มเติม / ชื่อผู้ประสานงาน <span class="required">*</span></label></label>
+            <textarea id="form-desc-input" class="form-control" rows="3" placeholder="ระบุรายละเอียดเพิ่มเติม..." required></textarea>
           </div>
 
           <div class="form-group">
-            <label>แนบไฟล์เอกสาร/ป้ายงาน</label>
+            <label>แนบไฟล์เอกสาร/ป้ายงาน <span class="required">*</span></label></label>
 
             <div id="edit-attachment-status" class="existing-file-card hidden">
               <div class="file-icon-box"><i class="fa-solid fa-file-arrow-up"></i></div>
@@ -377,7 +377,7 @@
             </div>
 
             <div id="upload-dropzone" class="upload-dropzone-box">
-              <input type="file" id="form-file-input" class="file-input-hidden" onchange="handleFileSelection(event)">
+              <input type="file" id="form-file-input" class="file-input-hidden" onchange="handleFileSelection(event)" required>
               <div class="dropzone-prompt">
                 <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
                 <p class="primary-text">กดคลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางเพื่ออัปโหลด</p>
