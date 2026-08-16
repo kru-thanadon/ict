@@ -7,19 +7,21 @@
   <base target="_top">
   <link rel="icon" type="image/x-icon" href="images/logo_ict.png">
   <title>ICT โรงเรียนบางละมุง - ปฏิทินกิจกรรม</title>
-  
+
   <!-- Google Fonts: Outfit and Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet">
+
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
+
   <!-- Flatpickr CSS & Dark Theme -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
-  
+
   <!-- Custom CSS -->
   <link rel="stylesheet" href="./style.css">
 
@@ -38,7 +40,8 @@
     <aside class="sidebar" id="app-sidebar">
       <div class="brand">
         <div class="logo">
-          <img src="https://raw.githubusercontent.com/blm-school/ict/refs/heads/main/images/blm-logo-250px-2.png" style="width: 62px;" alt="BLM Logo">
+          <img src="https://raw.githubusercontent.com/blm-school/ict/refs/heads/main/images/blm-logo-250px-2.png"
+            style="width: 62px;" alt="BLM Logo">
         </div>
         <div>
           <h1>ปฏิทินกิจกรรม ICT</h1>
@@ -86,7 +89,8 @@
       <div class="sidebar-section">
         <h3><i class="fa-solid fa-magnifying-glass"></i> ค้นหากิจกรรม</h3>
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="พิมพ์ชื่อกิจกรรม หรือผู้จัด..." oninput="handleSearchFilter()">
+          <input type="text" id="search-input" placeholder="พิมพ์ชื่อกิจกรรม หรือผู้จัด..."
+            oninput="handleSearchFilter()">
           <i class="fa-solid fa-magnifying-glass search-icon"></i>
         </div>
       </div>
@@ -101,17 +105,20 @@
             <span>ถ่ายภาพ</span>
           </label>
           <label class="filter-item">
-            <input type="checkbox" class="category-filter-checkbox" value="ถ่ายวิดีโอ" checked onchange="filterEvents()">
+            <input type="checkbox" class="category-filter-checkbox" value="ถ่ายวิดีโอ" checked
+              onchange="filterEvents()">
             <span class="category-indicator cat-video"></span>
             <span>ถ่ายวิดีโอ</span>
           </label>
           <label class="filter-item">
-            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(ห้องเฟื่องฟ้า)" checked onchange="filterEvents()">
+            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(ห้องเฟื่องฟ้า)" checked
+              onchange="filterEvents()">
             <span class="category-indicator cat-audio-ff"></span>
             <span>เครื่องเสียง(ห้องเฟื่องฟ้า)</span>
           </label>
           <label class="filter-item">
-            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(อบจ)" checked onchange="filterEvents()">
+            <input type="checkbox" class="category-filter-checkbox" value="เครื่องเสียง(อบจ)" checked
+              onchange="filterEvents()">
             <span class="category-indicator cat-audio-obj"></span>
             <span>เครื่องเสียง(อบจ)</span>
           </label>
@@ -131,7 +138,8 @@
       <header class="calendar-header">
         <div class="header-left-group">
           <!-- ปุ่มเปิด Sidebar บนมือถือ -->
-          <button id="sidebar-toggle-btn" class="btn btn-icon ripple sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="เมนู">
+          <button id="sidebar-toggle-btn" class="btn btn-icon ripple sidebar-toggle-btn" onclick="toggleSidebar()"
+            aria-label="เมนู">
             <i class="fa-solid fa-bars"></i>
           </button>
           <div class="title-section">
@@ -149,7 +157,8 @@
       </header>
 
       <div class="calendar-viewport">
-        <button class="btn btn-primary btn-block btn-large admin-badge-logged" onclick="openAddEventModal()" style="margin-bottom: 1.25rem;">
+        <button class="btn btn-primary btn-block btn-large admin-badge-logged" onclick="openAddEventModal()"
+          style="margin-bottom: 1.25rem;">
           <i class="fa-solid fa-plus"></i> เพิ่มกิจกรรมใหม่
         </button>
 
@@ -245,7 +254,8 @@
           <p class="modal-sub">กรุณากรอกรหัสผ่านเพื่อรับสิทธิ์ในการจัดการข้อมูลกิจกรรม</p>
           <div class="form-group">
             <label for="admin-password-input">รหัสผ่าน (Password)</label>
-            <input type="password" id="admin-password-input" class="form-control" placeholder="กรอกรหัสผ่าน..." required>
+            <input type="password" id="admin-password-input" class="form-control" placeholder="กรอกรหัสผ่าน..."
+              required>
           </div>
           <div id="admin-login-error" class="error-msg hidden">
             <i class="fa-solid fa-triangle-exclamation"></i> รหัสผ่านไม่ถูกต้อง
@@ -283,7 +293,12 @@
         </div>
 
         <div class="detail-section">
-          <h3><i class="fa-solid fa-align-left text-muted"></i> รายละเอียด / ผู้ประสานงาน</h3>
+          <h3><i class="fa-solid fa-align-left text-muted"></i> ประธาน / ผู้กล่าวเปิดงาน </h3>
+          <p id="detail-president" class="detail-description-text"> ไม่มีข้อมูลประธาน / ผู้กล่าวเปิดงาน </p>
+        </div>
+
+        <div class="detail-section">
+          <h3><i class="fa-solid fa-align-left text-muted"></i> รายละเอียดเพิ่มเติม / เวลาเปิดงาน </h3>
           <p id="detail-desc" class="detail-description-text">ไม่มีข้อมูลรายละเอียด</p>
         </div>
 
@@ -292,6 +307,19 @@
           <div id="detail-file-preview" class="file-preview-card"></div>
         </div>
 
+        <div class="detail-section">
+          <h3><i class="fa-solid fa-align-left text-muted"></i> ผู้ประสานงาน</h3>
+          <p id="detail-coordinator" class="detail-description-text">ไม่มีข้อมูลผู้ประสานงาน</p>
+        </div>
+
+        <div class="detail-section detail-time-box text-muted">
+          <div class="time-item">
+            <span class="time-label"></i> เวลาบันทึกข้อมูล: </span>
+            <span id="detail-timestamp" class="time-value">-</span>
+          </div>
+        </div>
+
+
         <div class="detail-meta">
           <small class="text-muted">รหัสกิจกรรม: <span id="detail-id"></span></small>
         </div>
@@ -299,8 +327,10 @@
 
       <div class="modal-footer" style="padding-bottom: 50px;">
         <div class="admin-actions">
-          <button id="admin-delete-btn" class="btn btn-danger btn-outline ripple" onclick="triggerDeleteEvent()"><i class="fa-solid fa-trash-can"></i> ลบ</button>
-          <button id="admin-edit-btn" class="btn btn-warning ripple" onclick="triggerEditEvent()"><i class="fa-solid fa-pen-to-square"></i> แก้ไข</button>
+          <button id="admin-delete-btn" class="btn btn-danger btn-outline ripple" onclick="triggerDeleteEvent()"><i
+              class="fa-solid fa-trash-can"></i> ลบ</button>
+          <button id="admin-edit-btn" class="btn btn-warning ripple" onclick="triggerEditEvent()"><i
+              class="fa-solid fa-pen-to-square"></i> แก้ไข</button>
         </div>
         <button type="button" class="btn btn-secondary ripple" onclick="closeDetailModal()">ปิด</button>
       </div>
@@ -320,7 +350,8 @@
         <div class="modal-body">
           <div class="form-group">
             <label for="form-title-input">หัวข้อกิจกรรม / ชื่องานประสาน <span class="required">*</span></label>
-            <input type="text" id="form-title-input" class="form-control" placeholder="ระบุชื่องานหรือหัวข้อ..." required>
+            <input type="text" id="form-title-input" class="form-control" placeholder="ระบุชื่องานหรือหัวข้อ..."
+              required>
           </div>
 
           <div class="form-group">
@@ -335,12 +366,15 @@
                 <span class="checkbox-badge-label cat-video-border"><i class="fa-solid fa-video"></i> ถ่ายวิดีโอ</span>
               </label>
               <label class="checkbox-badge-item">
-                <input type="checkbox" name="form-categories" value="เครื่องเสียง(ห้องเฟื่องฟ้า)" class="form-category-checkbox">
-                <span class="checkbox-badge-label cat-audio-ff-border"><i class="fa-solid fa-volume-high"></i> เครื่องเสียง (เฟื่องฟ้า)</span>
+                <input type="checkbox" name="form-categories" value="เครื่องเสียง(ห้องเฟื่องฟ้า)"
+                  class="form-category-checkbox">
+                <span class="checkbox-badge-label cat-audio-ff-border"><i class="fa-solid fa-volume-high"></i>
+                  เครื่องเสียง (เฟื่องฟ้า)</span>
               </label>
               <label class="checkbox-badge-item">
                 <input type="checkbox" name="form-categories" value="เครื่องเสียง(อบจ)" class="form-category-checkbox">
-                <span class="checkbox-badge-label cat-audio-obj-border"><i class="fa-solid fa-music"></i> เครื่องเสียง (อบจ)</span>
+                <span class="checkbox-badge-label cat-audio-obj-border"><i class="fa-solid fa-music"></i> เครื่องเสียง
+                  (อบจ)</span>
               </label>
             </div>
             <div id="form-category-error" class="error-msg hidden">
@@ -351,21 +385,31 @@
           <div class="form-row">
             <div class="form-group col-6">
               <label for="form-start-input">วันที่/เวลาเริ่มต้น <span class="required">*</span></label>
-              <input type="text" id="form-start-input" class="form-control" placeholder="เลือกวันเวลาเริ่มต้น..." required readonly>
+              <input type="text" id="form-start-input" class="form-control" placeholder="เลือกวันเวลาเริ่มต้น..."
+                required readonly>
             </div>
             <div class="form-group col-6">
               <label for="form-end-input">วันที่/เวลาสิ้นสุด <span class="required">*</span></label>
-              <input type="text" id="form-end-input" class="form-control" placeholder="เลือกวันเวลาสิ้นสุด..." required readonly>
+              <input type="text" id="form-end-input" class="form-control" placeholder="เลือกวันเวลาสิ้นสุด..." required
+                readonly>
             </div>
           </div>
 
           <div class="form-group">
-            <label for="form-desc-input">เวลาเปิดงาน / รายละเอียดเพิ่มเติม / ชื่อผู้ประสานงาน <span class="required">*</span></label></label>
-            <textarea id="form-desc-input" class="form-control" rows="3" placeholder="ระบุรายละเอียดเพิ่มเติม..." required></textarea>
+            <label for="form-president-input">ประธาน / ผู้กล่าวเปิดกิจกรรม <span class="required">*</span></label>
+            <input type="text" id="form-president-input" class="form-control"
+              placeholder="ระบุชื่อประธานผู้กล่าวเปิดงาน..." required>
           </div>
 
           <div class="form-group">
-            <label>แนบไฟล์เอกสาร/ป้ายงาน <span class="required">*</span></label></label>
+            <label for="form-desc-input">เวลาเปิดงาน / รายละเอียดเพิ่มเติม <span
+                class="required">*</span></label></label>
+            <textarea id="form-desc-input" class="form-control" rows="3" placeholder="ระบุรายละเอียดเพิ่มเติม..."
+              required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>แนบไฟล์เอกสารคำสั่ง / ป้ายงาน <span class="required">*</span></label></label>
 
             <div id="edit-attachment-status" class="existing-file-card hidden">
               <div class="file-icon-box"><i class="fa-solid fa-file-arrow-up"></i></div>
@@ -373,11 +417,13 @@
                 <span class="file-name-label">ตรวจพบไฟล์แนบดั้งเดิม</span>
                 <a href="#" id="edit-attachment-link" target="_blank" class="file-link-action">เปิดดูภาพเดิม</a>
               </div>
-              <button type="button" class="btn-delete-file" onclick="markAttachmentForDeletion()"><i class="fa-solid fa-trash"></i></button>
+              <button type="button" class="btn-delete-file" onclick="markAttachmentForDeletion()"><i
+                  class="fa-solid fa-trash"></i></button>
             </div>
 
             <div id="upload-dropzone" class="upload-dropzone-box">
-              <input type="file" id="form-file-input" class="file-input-hidden" onchange="handleFileSelection(event)" required>
+              <input type="file" id="form-file-input" class="file-input-hidden" onchange="handleFileSelection(event)"
+                required>
               <div class="dropzone-prompt">
                 <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
                 <p class="primary-text">กดคลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางเพื่ออัปโหลด</p>
@@ -394,11 +440,18 @@
               </div>
             </div>
           </div>
+
+          <div class="form-group">
+            <label for="form-coordinator-input">ชื่อผู้ประสานงาน <span class="required">*</span></label>
+            <input type="text" id="form-coordinator-input" class="form-control" placeholder="ระบุชื่อผู้ประสานงาน..." required>
+          </div>
         </div>
+
 
         <div class="modal-footer" style="padding-bottom: 50px;">
           <button type="button" class="btn btn-secondary ripple" onclick="closeFormModal()">ยกเลิก</button>
-          <button type="submit" class="btn btn-primary ripple"><i class="fa-solid fa-floppy-disk"></i> บันทึกรายการ</button>
+          <button type="submit" class="btn btn-primary ripple"><i class="fa-solid fa-floppy-disk"></i>
+            บันทึกรายการ</button>
         </div>
       </form>
     </div>
