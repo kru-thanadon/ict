@@ -3,321 +3,888 @@
 // With Optimistic Cache Engine & Detailed Logs
 // ==========================================================================
 
+// 📌 1. กำหนดค่า API Endpoints & Configuration
+const WORKER_API_URL = 'https://ict.deaseler.workers.dev';
+const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';
+const SUPABASE_BUCKET = 'calendar-files';
+
+const CACHE_KEY = 'cf_calendar_events_cache';
+
+let currentDate = new Date();
+let currentView = 'month';
+let events = [];
+let filteredEvents = [];
+let isAdmin = false;
+let adminPassword = '';
+let selectedEvent = null;
+
+let startPicker = null;
+let endPicker = null;
+let rawSelectedFile = null;
+let deleteExistingAttachment = false;
+
 document.addEventListener('DOMContentLoaded', function () {
-  // 🟢 Config Endpoints
-  const WORKER_URL = 'https://ict.deaseler.workers.dev';
-  const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
-  const SUPABASE_ANON_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';
+  console.log(`[${new Date().toLocaleTimeString()}] 🚀 [App Init] DOM Content Loaded -> Starting Application...`);
+  initApp();
+  if (typeof initTheme === 'function') initTheme();
+});
 
-  // Custom Modal Element Selectors (ตรงตาม index.html)
-  const detailModalEl = document.getElementById('detail-modal');
-  const formModalEl = document.getElementById('form-modal');
-  const eventForm = document.getElementById('event-form');
-  const fileInput = document.getElementById('form-file-input');
-
-  let currentFileBase64 = null;
-  let currentFileName = null;
-  let currentFileMimeType = null;
-
-  // 1. Initialize FullCalendar (ถ้าไม่มี #calendar ใน DOM ให้ใช้ Custom Grid)
-  const calendarEl = document.getElementById('calendar');
-  let calendar = null;
-
-  if (calendarEl) {
-    calendar = new FullCalendar.Calendar(calendarEl, {
-      initialView: 'dayGridMonth',
-      locale: 'th',
-      headerToolbar: {
-        left: 'prev,next today',
-        center: 'title',
-        right: 'dayGridMonth,timeGridWeek,listMonth'
-      },
-      selectable: true,
-      editable: false,
-      events: fetchEventsForCalendar,
-
-      dateClick: function (info) {
-        openAddEventModal(info.dateStr);
-      },
-
-      eventClick: function (info) {
-        showEventDetails(info.event);
-      }
-    });
-
-    calendar.render();
-  }
-
-  // 2. Fetch Events Logic (สลับ Hot Data & Cold Data)
-  async function fetchEventsForCalendar(fetchInfo, successCallback, failureCallback) {
-    const viewDate = calendar ? calendar.getDate() : new Date();
-    const currentDate = new Date();
-
-    const isCurrentMonth = (
-      viewDate.getFullYear() === currentDate.getFullYear() &&
-      viewDate.getMonth() === currentDate.getMonth()
-    );
-
-    const fetchUrl = isCurrentMonth ? WORKER_URL : `${WORKER_URL}?source=cold`;
-
-    try {
-      const response = await fetch(fetchUrl);
-      if (!response.ok) throw new Error('Network response was not ok');
-      const rawEvents = await response.json();
-
-      const calendarEvents = rawEvents.map(evt => ({
-        id: evt.id,
-        title: evt.title,
-        start: evt.start_date,
-        end: evt.end_date,
-        extendedProps: {
-          categories: evt.categories,
-          description: evt.description,
-          coordinator: evt.coordinator,
-          president: evt.president,
-          file_url: evt.file_url
-        }
-      }));
-
-      if (successCallback) successCallback(calendarEvents);
-      return calendarEvents;
-    } catch (error) {
-      console.error('Error fetching calendar events:', error);
-      if (failureCallback) failureCallback(error);
+function initApp() {
+  console.time('⏱️ App Initialization Time');
+  
+  const flatpickrConfig = {
+    enableTime: true,
+    dateFormat: "Y-m-d H:i:S",
+    altInput: true,
+    altInputClass: "form-control",
+    locale: "th",
+    time_24hr: true,
+    formatDate: function (date) {
+      const day = date.getDate();
+      const month = THAI_MONTHS_FULL[date.getMonth()];
+      const year = date.getFullYear() + 543;
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return day + ' ' + month + ' ' + year + ' เวลา ' + hours + ':' + minutes + ' น.';
     }
+  };
+
+  console.log(`[${new Date().toLocaleTimeString()}] ⚙️ [Init Step 1/4] Binding Flatpickr date pickers...`);
+  if (document.getElementById('form-start-input')) startPicker = flatpickr("#form-start-input", flatpickrConfig);
+  if (document.getElementById('form-end-input')) endPicker = flatpickr("#form-end-input", flatpickrConfig);
+
+  console.log(`[${new Date().toLocaleTimeString()}] 🔑 [Init Step 2/4] Checking saved admin session...`);
+  const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
+  if (savedPwd) setAdminState(true, savedPwd);
+
+  console.log(`[${new Date().toLocaleTimeString()}] ⚡ [Init Step 3/4] Triggering Instant Cache Load...`);
+  loadFromCache();
+
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Init Step 4/4] Triggering Background Server Sync...`);
+  syncWithServer();
+
+  setupDragAndDrop();
+  console.timeEnd('⏱️ App Initialization Time');
+}
+
+/**
+ * ⚡ ดึงข้อมูลจาก LocalStorage แสดงผลบนหน้าเว็บทันที
+ */
+function loadFromCache() {
+  console.time('⚡ Cache Load Time');
+  const cachedRaw = localStorage.getItem(CACHE_KEY);
+  if (cachedRaw) {
+    try {
+      events = JSON.parse(cachedRaw);
+      console.log(`[${new Date().toLocaleTimeString()}] 📦 [Cache] Loaded ${events.length} events from LocalStorage.`);
+      filterEvents();
+    } catch (e) {
+      console.error(`[${new Date().toLocaleTimeString()}] ⚠️ [Cache Corrupt] Failed to parse cached data:`, e);
+    }
+  } else {
+    console.log(`[${new Date().toLocaleTimeString()}] ℹ️ [Cache] No existing cache found in LocalStorage.`);
   }
+  console.timeEnd('⚡ Cache Load Time');
+}
 
-  // 3. File Input Change Handling
-  if (fileInput) {
-    fileInput.addEventListener('change', function (e) {
-      const file = e.target.files[0];
-      if (file) {
-        currentFileName = file.name;
-        currentFileMimeType = file.type;
+/**
+ * 💾 บันทึกสเตทปัจจุบันลง Cache พร้อม Re-render หน้าเว็บ
+ */
+function updateCacheAndRender(newEvents) {
+  console.time('💾 Local Cache & UI Render Time');
+  events = newEvents;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(events));
+  console.log(`[${new Date().toLocaleTimeString()}] 💾 [Cache Saved] Updated ${events.length} events to LocalStorage.`);
+  filterEvents();
+  console.timeEnd('💾 Local Cache & UI Render Time');
+}
 
-        const reader = new FileReader();
-        reader.onload = function (evt) {
-          currentFileBase64 = evt.target.result.split(',')[1];
-        };
-        reader.readAsDataURL(file);
-      } else {
-        clearFileSelection();
+/**
+ * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 Database
+ */
+function syncWithServer() {
+  const syncStartTime = performance.now();
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching events from Cloudflare D1...`);
+
+  fetch(`${WORKER_API_URL}`)
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
+      return res.json();
+    })
+    .then(dbEvents => {
+      const syncEndTime = performance.now();
+      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [Sync Duration] D1 responded in ${(syncEndTime - syncStartTime).toFixed(2)} ms`);
+
+      if (Array.isArray(dbEvents)) {
+        const mappedEvents = dbEvents.map(item => ({
+          ID: item.id,
+          Title: item.title || '',
+          'Start Date': item.start_date || '',
+          'End Date': item.end_date || '',
+          Categories: item.categories || '',
+          Description: item.description || '',
+          Coordinator: item.coordinator || '',
+          President: item.president || '',
+          'Attachment URL': item.file_url || '',
+          Timestamp: item.created_at || ''
+        }));
+
+        const currentCacheRaw = localStorage.getItem(CACHE_KEY) || '[]';
+        const serverRaw = JSON.stringify(mappedEvents);
+
+        if (currentCacheRaw !== serverRaw) {
+          console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Sync Diff] Updating cache with ${mappedEvents.length} items from D1.`);
+          updateCacheAndRender(mappedEvents);
+        } else {
+          console.log(`[${new Date().toLocaleTimeString()}] ✅ [Sync In Sync] Cache up-to-date.`);
+        }
       }
-    });
-  }
+    })
+    .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Error fetching from D1:`, err));
+}
 
-  // 4. Supabase Storage Direct Upload
-  async function uploadToSupabase(file) {
-    if (!file) return null;
-    const cleanFileName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const uploadUrl = `${SUPABASE_URL}/storage/v1/object/calendar-files/${cleanFileName}`;
+/**
+ * ☁️ อัปโหลดไฟล์โดยตรงเข้า Supabase Storage
+ */
+async function uploadToSupabase(file) {
+  if (!file) return null;
+  console.log(`[${new Date().toLocaleTimeString()}] ☁️ [Supabase Upload] Uploading "${file.name}"...`);
 
-    const response = await fetch(uploadUrl, {
+  const fileExt = file.name.split('.').pop();
+  const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${fileName}`;
+
+  try {
+    const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+        'apikey': SUPABASE_PUBLISHABLE_KEY,
         'Content-Type': file.type
       },
       body: file
     });
 
-    if (!response.ok) {
-      throw new Error('Supabase Storage Upload Failed');
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Supabase upload failed: ${errText}`);
     }
 
-    return `${SUPABASE_URL}/storage/v1/object/public/calendar-files/${cleanFileName}`;
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${fileName}`;
+    console.log(`[${new Date().toLocaleTimeString()}] ✅ [Supabase Success] File URL: ${publicUrl}`);
+    return publicUrl;
+  } catch (err) {
+    console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Supabase Error]`, err);
+    throw err;
+  }
+}
+
+// ==========================================================================
+// 🚀 Optimistic CRUD Actions
+// ==========================================================================
+
+async function handleFormSubmit(e) {
+  e.preventDefault();
+  const eventId = document.getElementById('form-event-id').value;
+  const actionType = eventId ? 'UPDATE' : 'CREATE';
+  console.log(`[${new Date().toLocaleTimeString()}] 📝 [Form Submit] Executing ${actionType}...`);
+  showLoader(true, 'กำลังอัปโหลดไฟล์และบันทึกข้อมูล...');
+
+  const categoryCbs = document.querySelectorAll('.form-category-checkbox');
+  const checkedCategories = [];
+  categoryCbs.forEach(cb => { if (cb.checked) checkedCategories.push(cb.value); });
+
+  if (checkedCategories.length === 0) {
+    showLoader(false);
+    showToast('กรุณาเลือกประเภทหมวดหมู่บริการอย่างน้อย 1 ประเภท', 'error');
+    return;
   }
 
-  // 5. Submit Form Handling
-  if (eventForm) {
-    eventForm.addEventListener('submit', async function (e) {
-      e.preventDefault();
+  const startDateObj = startPicker ? startPicker.selectedDates[0] : null;
+  const endDateObj = endPicker ? endPicker.selectedDates[0] : null;
 
-      const submitBtn = eventForm.querySelector('button[type="submit"]');
-      submitBtn.disabled = true;
-      submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> กำลังบันทึก...';
+  if (!startDateObj || !endDateObj || endDateObj <= startDateObj) {
+    showLoader(false);
+    showToast('ช่วงเวลาไม่ถูกต้อง', 'error');
+    return;
+  }
 
-      try {
-        const eventId = document.getElementById('form-event-id').value;
-        const fileObj = fileInput ? fileInput.files[0] : null;
-        let fileUrl = null;
+  let uploadedFileUrl = selectedEvent ? selectedEvent['Attachment URL'] : null;
 
-        if (fileObj) {
-          fileUrl = await uploadToSupabase(fileObj);
-        }
+  if (rawSelectedFile) {
+    try {
+      uploadedFileUrl = await uploadToSupabase(rawSelectedFile);
+    } catch (err) {
+      showLoader(false);
+      showToast('การอัปโหลดไฟล์แนบไม่สำเร็จ: ' + err.message, 'error');
+      return;
+    }
+  } else if (deleteExistingAttachment) {
+    uploadedFileUrl = null;
+  }
 
-        const payload = {
-          id: eventId || null,
-          title: document.getElementById('form-title-input').value,
-          start_date: document.getElementById('form-start-input').value,
-          end_date: document.getElementById('form-end-input').value,
-          categories: getSelectedCategories(),
-          description: document.getElementById('form-desc-input').value,
-          coordinator: document.getElementById('form-coordinator-input').value,
-          president: document.getElementById('form-president-input').value,
-          file_url: fileUrl,
-          file_data: currentFileBase64 ? {
-            bytes: currentFileBase64,
-            name: currentFileName,
-            mimeType: currentFileMimeType
-          } : null
-        };
+  const tempId = 'TEMP-' + Date.now();
+  const eventData = {
+    ID: eventId || tempId,
+    Title: document.getElementById('form-title-input').value.trim(),
+    'Start Date': formatToSheetDate(startDateObj),
+    'End Date': formatToSheetDate(endDateObj),
+    Categories: checkedCategories.join(', '),
+    Description: document.getElementById('form-desc-input').value.trim(),
+    Coordinator: document.getElementById('form-coordinator-input') ? document.getElementById('form-coordinator-input').value.trim() : '',
+    President: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : '',
+    'Attachment URL': uploadedFileUrl,
+    Timestamp: formatToSheetDate(new Date())
+  };
 
-        const response = await fetch(WORKER_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+  closeFormModal();
+  showLoader(false);
 
-        const result = await response.json();
+  let updatedEvents = [...events];
+  if (eventId) {
+    updatedEvents = updatedEvents.map(evt => evt.ID === eventId ? { ...evt, ...eventData } : evt);
+  } else {
+    updatedEvents.push(eventData);
+  }
+  updateCacheAndRender(updatedEvents);
+  showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
 
-        if (result.success) {
-          closeFormModal();
-          resetForm();
-          if (calendar) calendar.refetchEvents();
-        } else {
-          alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล: ' + (result.message || ''));
-        }
-      } catch (err) {
-        console.error('Save error:', err);
-        alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> บันทึกรายการ';
+  const payload = {
+    id: eventId || undefined,
+    title: eventData.Title,
+    start_date: eventData['Start Date'],
+    end_date: eventData['End Date'],
+    categories: eventData.Categories,
+    description: eventData.Description,
+    coordinator: eventData.Coordinator,
+    president: eventData.President,
+    file_url: uploadedFileUrl
+  };
+
+  fetch(`${WORKER_API_URL}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(res => res.json())
+    .then(result => {
+      if (result.success) {
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [D1 Success] Saved to Cloudflare D1.`);
+        syncWithServer();
+      } else {
+        throw new Error(result.message || 'D1 insertion failed');
       }
+    })
+    .catch(err => {
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [D1 Error]`, err);
+      showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูลลงฐานข้อมูล', 'error');
+      syncWithServer();
+    });
+}
+
+function triggerDeleteEvent() {
+  if (!selectedEvent) return;
+  if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
+
+  const targetId = selectedEvent.ID;
+  console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [Delete Initiated] ID: ${targetId}`);
+  closeDetailModal();
+
+  const updatedEvents = events.filter(evt => evt.ID !== targetId);
+  updateCacheAndRender(updatedEvents);
+  showToast('ลบรายการเรียบร้อยแล้ว', 'success');
+
+  fetch(`${WORKER_API_URL}?id=${targetId}`, {
+    method: 'DELETE'
+  })
+    .then(res => res.json())
+    .then(result => {
+      if (result.success) {
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [D1 Delete Success] Item removed.`);
+        syncWithServer();
+      } else {
+        throw new Error('Delete failed');
+      }
+    })
+    .catch(err => {
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Delete Error]`, err);
+      showToast('การลบข้อมูลในฐานข้อมูลไม่สำเร็จ', 'error');
+      syncWithServer();
+    });
+}
+
+// ==========================================================================
+// Utility Helper & UI Rendering functions
+// ==========================================================================
+
+function showLoader(show, text) {
+  const loader = document.getElementById('loading-overlay');
+  if (!loader) return;
+  const loaderText = loader.querySelector('.loading-text');
+  if (show) {
+    if (loaderText) loaderText.innerText = text || 'กำลังทำงาน...';
+    loader.classList.add('active');
+  } else {
+    loader.classList.remove('active');
+  }
+}
+
+function showToast(message, type = 'info') {
+  console.log(`[${new Date().toLocaleTimeString()}] 🔔 [Toast] (${type.toUpperCase()}): ${message}`);
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+
+  let icon = '<i class="fa-solid fa-info-circle toast-icon"></i>';
+  if (type === 'success') icon = '<i class="fa-solid fa-circle-check toast-icon"></i>';
+  if (type === 'error') icon = '<i class="fa-solid fa-circle-exclamation toast-icon"></i>';
+
+  toast.innerHTML = icon + '\n<span class="toast-message">' + message + '</span>';
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = 'slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse forwards';
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+function openAdminModal() {
+  const pwdInput = document.getElementById('admin-password-input');
+  const errBox = document.getElementById('admin-login-error');
+  const modal = document.getElementById('admin-modal');
+  if (pwdInput) pwdInput.value = '';
+  if (errBox) errBox.classList.add('hidden');
+  if (modal) modal.classList.add('active');
+}
+
+function closeAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function setAdminState(adminLogged, password) {
+  isAdmin = adminLogged;
+  adminPassword = password;
+  
+  const statusBadge = document.getElementById('admin-status');
+  const statusText = document.getElementById('admin-status-text');
+  const actionBtn = document.getElementById('admin-action-btn');
+
+  if (adminLogged) {
+    if (statusBadge) statusBadge.className = 'admin-badge admin-badge-logged';
+    if (statusText) statusText.innerHTML = '<i class="fa-solid fa-shield-check"></i> โหมดผู้ดูแลระบบ (Admin)';
+    if (actionBtn) {
+      actionBtn.innerHTML = '<i class="fa-solid fa-lock-open"></i> ออกจากระบบ Admin';
+      actionBtn.setAttribute('onclick', 'logoutAdmin()');
+    }
+  } else {
+    if (statusBadge) statusBadge.className = 'admin-badge admin-badge-guest';
+    if (statusText) statusText.innerText = 'โหมดผู้ใช้งานทั่วไป';
+    if (actionBtn) {
+      actionBtn.innerHTML = '<i class="fa-solid fa-lock"></i> เข้าสู่ระบบ Admin';
+      actionBtn.setAttribute('onclick', 'openAdminModal()');
+    }
+  }
+  updateAdminActionButtonsVisibility();
+}
+
+function submitAdminPassword() {
+  const pwdInput = document.getElementById('admin-password-input') ? document.getElementById('admin-password-input').value : '';
+  if (!pwdInput) return;
+  localStorage.setItem('gas_calendar_admin_pwd', pwdInput);
+  setAdminState(true, pwdInput);
+  closeAdminModal();
+  showToast('ยืนยันสิทธิ์ผู้ดูแลระบบแล้ว', 'info');
+}
+
+function logoutAdmin() {
+  localStorage.removeItem('gas_calendar_admin_pwd');
+  setAdminState(false, '');
+  showToast('ออกจากระบบผู้ดูแลระบบแล้ว', 'info');
+}
+
+function updateAdminActionButtonsVisibility() {
+  const deleteBtn = document.getElementById('admin-delete-btn');
+  const editBtn = document.getElementById('admin-edit-btn');
+  if (isAdmin) {
+    if (deleteBtn) deleteBtn.classList.remove('hidden');
+    if (editBtn) editBtn.classList.remove('hidden');
+  } else {
+    if (deleteBtn) deleteBtn.classList.add('hidden');
+    if (editBtn) editBtn.classList.add('hidden');
+  }
+}
+
+function parseSheetDate(dateStr) {
+  if (!dateStr) return null;
+  let cleanStr = String(dateStr).replace(/\(.*?\)/g, '').trim();
+  const autoDate = new Date(cleanStr);
+  if (!isNaN(autoDate.getTime())) return autoDate;
+
+  try {
+    cleanStr = cleanStr.replace('T', ' ');
+    const parts = cleanStr.split(' ');
+    const thaiMonths = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    let thaiMonthIndex = -1;
+    for (let i = 0; i < thaiMonths.length; i++) {
+      if (cleanStr.includes(thaiMonths[i])) { thaiMonthIndex = i; break; }
+    }
+
+    if (thaiMonthIndex !== -1) {
+      let day = parseInt(parts[0], 10);
+      let year = parseInt(parts[2], 10);
+      if (year > 2500) year -= 543;
+      return new Date(year, thaiMonthIndex, day, 0, 0, 0);
+    }
+
+    if (parts.length > 0) {
+      const datePart = parts[0];
+      const timePart = parts[1] || '00:00:00';
+      const separator = datePart.includes('-') ? '-' : (datePart.includes('/') ? '/' : null);
+      if (separator) {
+        const dParts = datePart.split(separator);
+        const tParts = timePart.split(':');
+        let year, month, day;
+        if (dParts[0].length === 4) {
+          year = parseInt(dParts[0], 10); month = parseInt(dParts[1], 10) - 1; day = parseInt(dParts[2], 10);
+        } else {
+          day = parseInt(dParts[0], 10); month = parseInt(dParts[1], 10) - 1; year = parseInt(dParts[2], 10);
+        }
+        return new Date(year, month, day, parseInt(tParts[0], 10) || 0, parseInt(tParts[1], 10) || 0, parseInt(tParts[2], 10) || 0);
+      }
+    }
+  } catch (e) { console.error(`[${new Date().toLocaleTimeString()}] Parse Error Date:`, dateStr); }
+  return null;
+}
+
+function formatToSheetDate(date) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function formatDisplayDate(dateStr) {
+  const date = parseSheetDate(dateStr);
+  if (!date) return '-';
+  const day = date.getDate();
+  const month = THAI_MONTHS_FULL[date.getMonth()];
+  const year = date.getFullYear() + 543;
+  const time = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0') + ' น.';
+  return `${day} ${month} ${year} เวลา ${time}`;
+}
+
+const THAI_MONTHS_FULL = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+];
+
+function getSelectedCategoryFilters() {
+  const checkboxes = document.querySelectorAll('.category-filter-checkbox');
+  const selected = [];
+  checkboxes.forEach(cb => { if (cb.checked) selected.push(cb.value); });
+  return selected;
+}
+
+function handleSearchFilter() { filterEvents(); }
+
+function filterEvents() {
+  const searchQuery = document.getElementById('search-input') ? document.getElementById('search-input').value.toLowerCase().trim() : '';
+  const selectedCategories = getSelectedCategoryFilters();
+
+  filteredEvents = events.filter(evt => {
+    const matchText = !searchQuery ||
+      (evt.Title && evt.Title.toLowerCase().includes(searchQuery)) ||
+      (evt.Description && evt.Description.toLowerCase().includes(searchQuery)) ||
+      (evt.Coordinator && evt.Coordinator.toLowerCase().includes(searchQuery)) ||
+      (evt.President && evt.President.toLowerCase().includes(searchQuery));
+
+    const eventCats = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
+    const matchCategory = eventCats.some(cat => selectedCategories.includes(cat)) || (eventCats.length === 0 && selectedCategories.length === 0);
+
+    return matchText && matchCategory;
+  });
+
+  renderCalendar();
+}
+
+function switchView(view) {
+  currentView = view;
+  const monthBtn = document.getElementById('view-month-btn');
+  const weekBtn = document.getElementById('view-week-btn');
+  const grid = document.getElementById('calendar-grid');
+
+  if (monthBtn) monthBtn.classList.toggle('active', view === 'month');
+  if (weekBtn) weekBtn.classList.toggle('active', view === 'week');
+  if (grid) grid.classList.toggle('week-view', view === 'week');
+  renderCalendar();
+}
+
+function navigateCalendar(direction) {
+  if (currentView === 'month') {
+    currentDate.setMonth(currentDate.getMonth() + direction);
+  } else {
+    currentDate.setDate(currentDate.getDate() + (direction * 7));
+  }
+  renderCalendar();
+}
+
+function navigateToday() {
+  currentDate = new Date();
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const grid = document.getElementById('calendar-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  const currentMonthName = THAI_MONTHS_FULL[currentDate.getMonth()];
+  const currentYearBE = currentDate.getFullYear() + 543;
+
+  const titleDisplay = document.getElementById('calendar-title-display');
+  const sidebarDisplay = document.getElementById('sidebar-month-display');
+
+  if (currentView === 'month') {
+    if (titleDisplay) titleDisplay.innerText = currentMonthName + ' ' + currentYearBE;
+    if (sidebarDisplay) sidebarDisplay.innerText = currentMonthName + ' ' + currentYearBE;
+    renderMonthView(grid);
+  } else {
+    const sunDate = getSundayOfWeek(currentDate);
+    const satDate = new Date(sunDate);
+    satDate.setDate(sunDate.getDate() + 6);
+    const startStr = sunDate.getDate() + ' ' + THAI_MONTHS_FULL[sunDate.getMonth()] + ' ' + (sunDate.getFullYear() + 543);
+    const endStr = satDate.getDate() + ' ' + THAI_MONTHS_FULL[satDate.getMonth()] + ' ' + (satDate.getFullYear() + 543);
+
+    if (titleDisplay) titleDisplay.innerText = 'ช่วงสัปดาห์: ' + startStr + ' - ' + endStr;
+    if (sidebarDisplay) sidebarDisplay.innerText = currentMonthName + ' ' + currentYearBE;
+    renderWeekView(grid);
+  }
+  updateDashboard();
+}
+
+function renderMonthView(gridContainer) {
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const totalDays = new Date(year, month + 1, 0).getDate();
+  const prevMonthTotalDays = new Date(year, month, 0).getDate();
+  const today = new Date();
+
+  for (let i = firstDayIndex - 1; i >= 0; i--) {
+    createDayCell(gridContainer, prevMonthTotalDays - i, new Date(year, month - 1, prevMonthTotalDays - i), true);
+  }
+  for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
+    const dateObj = new Date(year, month, dayNum);
+    createDayCell(gridContainer, dayNum, dateObj, false, dateObj.toDateString() === today.toDateString());
+  }
+  const remainingCells = 42 - gridContainer.children.length;
+  for (let dayNum = 1; dayNum <= remainingCells; dayNum++) {
+    createDayCell(gridContainer, dayNum, new Date(year, month + 1, dayNum), true);
+  }
+}
+
+function renderWeekView(gridContainer) {
+  const sunday = getSundayOfWeek(currentDate);
+  const today = new Date();
+  for (let i = 0; i < 7; i++) {
+    const dateObj = new Date(sunday);
+    dateObj.setDate(sunday.getDate() + i);
+    createDayCell(gridContainer, dateObj.getDate(), dateObj, false, dateObj.toDateString() === today.toDateString());
+  }
+}
+
+function getSundayOfWeek(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  return new Date(date.setDate(date.getDate() - day));
+}
+
+function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
+  const cell = document.createElement('div');
+  cell.className = 'day-cell';
+  if (isOtherMonth) cell.classList.add('other-month');
+  if (isToday) cell.classList.add('today');
+
+  const header = document.createElement('div');
+  header.className = 'day-header';
+  const numSpan = document.createElement('span');
+  numSpan.className = 'day-number';
+  numSpan.innerText = dayNumber;
+  header.appendChild(numSpan);
+  cell.appendChild(header);
+
+  const eventsList = document.createElement('div');
+  eventsList.className = 'day-events-container';
+
+  getEventsForDate(dateObj).forEach(evt => {
+    const chip = document.createElement('div');
+    chip.className = 'event-chip';
+    const categoriesList = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
+
+    if (categoriesList.length === 1) {
+      const cat = categoriesList[0];
+      if (cat === 'ถ่ายภาพ') chip.classList.add('chip-photo');
+      else if (cat === 'ถ่ายวิดีโอ') chip.classList.add('chip-video');
+      else if (cat === 'เครื่องเสียง(ห้องเฟื่องฟ้า)') chip.classList.add('chip-audio-ff');
+      else if (cat === 'เครื่องเสียง(อบจ)') chip.classList.add('chip-audio-obj');
+    } else if (categoriesList.length > 1) {
+      chip.classList.add('chip-multi');
+      const dotsContainer = document.createElement('div');
+      dotsContainer.className = 'chip-categories-dots';
+      categoriesList.forEach(cat => {
+        const dot = document.createElement('span');
+        dot.className = 'dot-indicator';
+        if (cat === 'ถ่ายภาพ') dot.style.backgroundColor = 'var(--color-photo)';
+        else if (cat === 'ถ่ายวิดีโอ') dot.style.backgroundColor = 'var(--color-video)';
+        else if (cat === 'เครื่องเสียง(ห้องเฟื่องฟ้า)') dot.style.backgroundColor = 'var(--color-audio-ff)';
+        else if (cat === 'เครื่องเสียง(อบจ)') dot.style.backgroundColor = 'var(--color-audio-obj)';
+        dotsContainer.appendChild(dot);
+      });
+      chip.appendChild(dotsContainer);
+    }
+
+    const titleText = document.createElement('span');
+    titleText.innerText = evt.Title;
+    chip.appendChild(titleText);
+    chip.onclick = (e) => { e.stopPropagation(); openDetailModal(evt); };
+    eventsList.appendChild(chip);
+  });
+
+  cell.appendChild(eventsList);
+  container.appendChild(cell);
+}
+
+function getEventsForDate(targetDate) {
+  const compareDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+  return filteredEvents.filter(evt => {
+    const sDate = parseSheetDate(evt['Start Date']);
+    const eDate = parseSheetDate(evt['End Date']);
+    if (!sDate || !eDate) return false;
+    const startDateClean = new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate());
+    const endDateClean = new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
+    return compareDate >= startDateClean && compareDate <= endDateClean;
+  });
+}
+
+function openDetailModal(eventObj) {
+  selectedEvent = eventObj;
+  const detailTitle = document.getElementById('detail-title');
+  const detailStart = document.getElementById('detail-start');
+  const detailEnd = document.getElementById('detail-end');
+  const detailDesc = document.getElementById('detail-desc');
+  const detailId = document.getElementById('detail-id');
+
+  if (detailTitle) detailTitle.innerText = eventObj.Title;
+  if (detailStart) detailStart.innerText = formatDisplayDate(eventObj['Start Date']);
+  if (detailEnd) detailEnd.innerText = formatDisplayDate(eventObj['End Date']);
+  if (detailDesc) detailDesc.innerText = eventObj.Description || 'ไม่มีรายละเอียด';
+  if (detailId) detailId.innerText = eventObj.ID;
+
+  if (document.getElementById('detail-coordinator')) document.getElementById('detail-coordinator').innerText = eventObj.Coordinator || '-';
+  if (document.getElementById('detail-president')) document.getElementById('detail-president').innerText = eventObj.President || '-';
+  if (document.getElementById('detail-timestamp')) document.getElementById('detail-timestamp').innerText = eventObj.Timestamp ? formatDisplayDate(eventObj.Timestamp) : '-';
+
+  const badgeContainer = document.getElementById('detail-categories');
+  if (badgeContainer) {
+    badgeContainer.innerHTML = '';
+    (eventObj.Categories ? eventObj.Categories.split(',').map(c => c.trim()) : []).forEach(cat => {
+      const badge = document.createElement('span');
+      badge.className = 'detail-tag';
+      if (cat === 'ถ่ายภาพ') badge.className += ' tag-photo';
+      else if (cat === 'ถ่ายวิดีโอ') badge.className += ' tag-video';
+      else if (cat === 'เครื่องเสียง(ห้องเฟื่องฟ้า)') badge.className += ' tag-audio-ff';
+      else if (cat === 'เครื่องเสียง(อบจ)') badge.className += ' tag-audio-obj';
+      badge.innerText = cat;
+      badgeContainer.appendChild(badge);
     });
   }
 
-  // 6. Helper & Modal Control Functions (Window Scoped)
-  window.openAddEventModal = function (dateStr = '') {
-    resetForm();
-    if (dateStr) {
-      document.getElementById('form-start-input').value = dateStr + ' 08:30';
-      document.getElementById('form-end-input').value = dateStr + ' 16:30';
-    }
-    document.getElementById('form-title').textContent = 'เพิ่มกิจกรรมงานปฏิทิน';
-    formModalEl.classList.add('active');
-  };
-
-  window.closeFormModal = function () {
-    formModalEl.classList.remove('active');
-    resetForm();
-  };
-
-  window.closeDetailModal = function () {
-    detailModalEl.classList.remove('active');
-  };
-
-  window.triggerDeleteEvent = async function () {
-    const eventId = document.getElementById('detail-id').textContent;
-    if (!eventId) return;
-
-    if (confirm('คุณต้องการยกเลิก/ลบรายการนี้ใช่หรือไม่?')) {
-      try {
-        const response = await fetch(`${WORKER_URL}?id=${eventId}`, {
-          method: 'DELETE'
-        });
-        const result = await response.json();
-
-        if (result.success) {
-          closeDetailModal();
-          if (calendar) calendar.refetchEvents();
-        } else {
-          alert('ไม่สามารถลบรายการได้');
-        }
-      } catch (err) {
-        console.error('Delete error:', err);
-        alert('เกิดข้อผิดพลาดในการลบรายการ');
-      }
-    }
-  };
-
-  window.triggerEditEvent = function () {
-    const eventId = document.getElementById('detail-id').textContent;
-    if (!calendar || !eventId) return;
-
-    const event = calendar.getEventById(eventId);
-
-    if (event) {
-      closeDetailModal();
-
-      document.getElementById('form-event-id').value = event.id;
-      document.getElementById('form-title-input').value = event.title;
-      document.getElementById('form-start-input').value = formatDateTimeLocal(event.start);
-      document.getElementById('form-end-input').value = formatDateTimeLocal(event.end);
-      document.getElementById('form-desc-input').value = event.extendedProps.description || '';
-      document.getElementById('form-coordinator-input').value = event.extendedProps.coordinator || '';
-      document.getElementById('form-president-input').value = event.extendedProps.president || '';
-
-      setSelectedCategories(event.extendedProps.categories);
-      document.getElementById('form-title').textContent = 'แก้ไขกิจกรรมงานปฏิทิน';
-
-      formModalEl.classList.add('active');
-    }
-  };
-
-  function showEventDetails(event) {
-    document.getElementById('detail-id').textContent = event.id;
-    document.getElementById('detail-title').textContent = event.title;
-    document.getElementById('detail-start').textContent = formatThaiDate(event.start);
-    document.getElementById('detail-end').textContent = formatThaiDate(event.end);
-    document.getElementById('detail-categories').textContent = event.extendedProps.categories || '-';
-    document.getElementById('detail-desc').textContent = event.extendedProps.description || '-';
-    document.getElementById('detail-president').textContent = event.extendedProps.president || '-';
-    document.getElementById('detail-coordinator').textContent = event.extendedProps.coordinator || '-';
-
-    const filePreview = document.getElementById('detail-file-preview');
-    if (event.extendedProps.file_url) {
-      filePreview.innerHTML = `<a href="${event.extendedProps.file_url}" target="_blank" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-paperclip"></i> เปิดดูไฟล์แนบเอกสาร</a>`;
+  const previewContainer = document.getElementById('detail-file-preview');
+  const attachmentSection = document.getElementById('detail-attachment-section');
+  if (previewContainer && attachmentSection) {
+    previewContainer.innerHTML = '';
+    if (eventObj['Attachment URL']) {
+      attachmentSection.classList.remove('hidden');
+      previewContainer.innerHTML = `<a href="${eventObj['Attachment URL']}" class="attachment-link-btn" target="_blank"><i class="fa-solid fa-up-right-from-square"></i> เปิดดูไฟล์แนบ</a>`;
     } else {
-      filePreview.innerHTML = '<span class="text-muted">ไม่มีไฟล์แนบ</span>';
+      attachmentSection.classList.add('hidden');
+    }
+  }
+
+  updateAdminActionButtonsVisibility();
+  const modal = document.getElementById('detail-modal');
+  if (modal) modal.classList.add('active');
+}
+
+function closeDetailModal() {
+  const modal = document.getElementById('detail-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function triggerEditEvent() {
+  if (!selectedEvent) return;
+  closeDetailModal();
+
+  document.getElementById('form-event-id').value = selectedEvent.ID;
+  document.getElementById('form-title-input').value = selectedEvent.Title;
+  document.getElementById('form-desc-input').value = selectedEvent.Description || '';
+  if (document.getElementById('form-coordinator-input')) document.getElementById('form-coordinator-input').value = selectedEvent.Coordinator || '';
+  if (document.getElementById('form-president-input')) document.getElementById('form-president-input').value = selectedEvent.President || '';
+
+  if (startPicker) startPicker.setDate(parseSheetDate(selectedEvent['Start Date']));
+  if (endPicker) endPicker.setDate(parseSheetDate(selectedEvent['End Date']));
+
+  const categoriesList = selectedEvent.Categories ? selectedEvent.Categories.split(',').map(c => c.trim()) : [];
+  document.querySelectorAll('.form-category-checkbox').forEach(cb => { cb.checked = categoriesList.includes(cb.value); });
+
+  clearFileSelection();
+  deleteExistingAttachment = false;
+  document.getElementById('form-title').innerText = 'แก้ไขข้อมูลรายการประสาน';
+  document.getElementById('form-modal').classList.add('active');
+}
+
+function openAddEventModal() {
+  document.getElementById('form-event-id').value = '';
+  document.getElementById('form-title-input').value = '';
+  document.getElementById('form-desc-input').value = '';
+
+  const now = new Date();
+  now.setMinutes(0); now.setSeconds(0);
+  const endVal = new Date(now); endVal.setHours(endVal.getHours() + 1);
+
+  if (startPicker) startPicker.setDate(now);
+  if (endPicker) endPicker.setDate(endVal);
+
+  document.querySelectorAll('.form-category-checkbox').forEach(cb => cb.checked = false);
+  clearFileSelection();
+  deleteExistingAttachment = false;
+
+  document.getElementById('form-title').innerText = 'เพิ่มกิจกรรมใหม่ลงปฏิทิน';
+  document.getElementById('form-modal').classList.add('active');
+}
+
+function closeFormModal() {
+  const modal = document.getElementById('form-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function handleFileSelection(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (file.size > 10 * 1024 * 1024) {
+    showToast('ไฟล์มีขนาดเกินข้อกำหนดสูงสุด (10MB)', 'error');
+    clearFileSelection();
+    return;
+  }
+  
+  rawSelectedFile = file;
+  document.getElementById('selected-file-name').innerText = file.name;
+  document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('selected-file-display').classList.remove('hidden');
+  document.querySelector('.dropzone-prompt').classList.add('hidden');
+}
+
+function clearFileSelection() {
+  rawSelectedFile = null;
+  if (document.getElementById('form-file-input')) document.getElementById('form-file-input').value = '';
+  if (document.getElementById('selected-file-display')) document.getElementById('selected-file-display').classList.add('hidden');
+  if (document.querySelector('.dropzone-prompt')) document.querySelector('.dropzone-prompt').classList.remove('hidden');
+}
+
+function setupDragAndDrop() {
+  const dropzone = document.getElementById('upload-dropzone');
+  if (!dropzone) return;
+  dropzone.addEventListener('click', (e) => {
+    if (!e.target.closest('.btn-clear-selection')) document.getElementById('form-file-input').click();
+  });
+  dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+      document.getElementById('form-file-input').files = e.dataTransfer.files;
+      handleFileSelection({ target: { files: e.dataTransfer.files } });
+    }
+  });
+}
+
+function updateDashboard() {
+  const now = new Date();
+  const currentYear = currentDate.getFullYear();
+  const currentMonth = currentDate.getMonth();
+
+  let monthTotal = 0, todayTotal = 0, countPhoto = 0, countVideo = 0, countAudioFF = 0, countAudioObj = 0;
+  const upcomingEvents = [];
+
+  events.forEach(evt => {
+    const sDate = parseSheetDate(evt['Start Date']);
+    const eDate = parseSheetDate(evt['End Date']);
+    if (!sDate || !eDate) return;
+
+    if ((sDate.getFullYear() === currentYear && sDate.getMonth() === currentMonth) || (eDate.getFullYear() === currentYear && eDate.getMonth() === currentMonth)) {
+      monthTotal++;
+      (evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : []).forEach(cat => {
+        if (cat === 'ถ่ายภาพ') countPhoto++;
+        else if (cat === 'ถ่ายวิดีโอ') countVideo++;
+        else if (cat === 'เครื่องเสียง(ห้องเฟื่องฟ้า)') countAudioFF++;
+        else if (cat === 'เครื่องเสียง(อบจ)') countAudioObj++;
+      });
     }
 
-    detailModalEl.classList.add('active');
+    const checkToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (checkToday >= new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate()) && checkToday <= new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate())) {
+      todayTotal++;
+    }
+    if (eDate >= now) upcomingEvents.push(evt);
+  });
+
+  if (document.getElementById('stat-month-total')) document.getElementById('stat-month-total').innerText = monthTotal;
+  if (document.getElementById('stat-today-total')) document.getElementById('stat-today-total').innerText = todayTotal;
+  if (document.getElementById('stat-cat-photo')) document.getElementById('stat-cat-photo').innerText = countPhoto;
+  if (document.getElementById('stat-cat-video')) document.getElementById('stat-cat-video').innerText = countVideo;
+  if (document.getElementById('stat-cat-audio-ff')) document.getElementById('stat-cat-audio-ff').innerText = countAudioFF;
+  if (document.getElementById('stat-cat-audio-obj')) document.getElementById('stat-cat-audio-obj').innerText = countAudioObj;
+
+  upcomingEvents.sort((a, b) => (parseSheetDate(a['Start Date']) || 0) - (parseSheetDate(b['Start Date']) || 0));
+  const upcomingList = document.getElementById('upcoming-list');
+  if (upcomingList) {
+    upcomingList.innerHTML = '';
+    const topUpcoming = upcomingEvents.slice(0, 4);
+    if (topUpcoming.length === 0) {
+      upcomingList.innerHTML = '<div class="upcoming-empty">ไม่มีกิจกรรมเร็ว ๆ นี้</div>';
+    } else {
+      topUpcoming.forEach(evt => {
+        const card = document.createElement('div');
+        card.className = 'upcoming-card';
+        card.onclick = () => openDetailModal(evt);
+        card.innerHTML = `<div class="upcoming-info"><span class="upcoming-title">${evt.Title}</span><span class="upcoming-time"><i class="fa-regular fa-clock"></i> ${formatDisplayDate(evt['Start Date'])}</span></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.75rem;"></i>`;
+        upcomingList.appendChild(card);
+      });
+    }
   }
+}
 
-  function resetForm() {
-    if (eventForm) eventForm.reset();
-    document.getElementById('form-event-id').value = '';
-    clearFileSelection();
-  }
+function initTheme() {
+  const isDark = (localStorage.getItem('theme') === 'dark');
+  document.body.classList.toggle('dark-mode', isDark);
+  updateThemeButtonUI(isDark);
+}
 
-  window.clearFileSelection = function () {
-    if (fileInput) fileInput.value = '';
-    currentFileBase64 = null;
-    currentFileName = null;
-    currentFileMimeType = null;
+function toggleTheme() {
+  const isDark = document.body.classList.toggle('dark-mode');
+  localStorage.setItem('theme', isDark ? 'dark' : 'light');
+  updateThemeButtonUI(isDark);
+}
 
-    const selectedDisplay = document.getElementById('selected-file-display');
-    if (selectedDisplay) selectedDisplay.classList.add('hidden');
-  };
-
-  function getSelectedCategories() {
-    const checkboxes = document.querySelectorAll('input[name="form-categories"]:checked');
-    return Array.from(checkboxes).map(cb => cb.value).join(', ');
-  }
-
-  function setSelectedCategories(categoriesStr) {
-    const checkboxes = document.querySelectorAll('input[name="form-categories"]');
-    const selectedList = categoriesStr ? categoriesStr.split(',').map(s => s.trim()) : [];
-    checkboxes.forEach(cb => {
-      cb.checked = selectedList.includes(cb.value);
-    });
-  }
-
-  function formatDateTimeLocal(dateObj) {
-    if (!dateObj) return '';
-    const d = new Date(dateObj);
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 16).replace('T', ' ');
-  }
-
-  function formatThaiDate(dateObj) {
-    if (!dateObj) return '-';
-    return new Date(dateObj).toLocaleString('th-TH', {
-      dateStyle: 'short',
-      timeStyle: 'short'
-    });
-  }
-});
+function updateThemeButtonUI(isDark) {
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i> โหมดสว่าง' : '<i class="fa-solid fa-moon"></i> โหมดมืด';
+}
