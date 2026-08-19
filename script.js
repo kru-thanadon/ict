@@ -1,5 +1,6 @@
 // ========================================================================== 
 // External Website Calendar JS Engine (GAS Backend + Optimistic Cache Engine)
+// With Detailed Performance & Step Tracking Logs
 // ==========================================================================
 
 const API_URL = 'https://script.google.com/macros/s/AKfycbw5ufgADxQXqvm40HfAmKfoE4d5S1DvddgZ5ZgXIQwGYhFng5iKz3Ykhuvps6c1Kygt/exec';
@@ -19,11 +20,14 @@ let selectedFile = null;
 let deleteExistingAttachment = false;
 
 document.addEventListener('DOMContentLoaded', function () {
+  console.log(`[${new Date().toLocaleTimeString()}] 🚀 [App Init] DOM Content Loaded -> Starting Application...`);
   initApp();
   if (typeof initTheme === 'function') initTheme();
 });
 
 function initApp() {
+  console.time('⏱️ App Initialization Time');
+  
   const flatpickrConfig = {
     enableTime: true,
     dateFormat: "Y-m-d H:i:S",
@@ -41,85 +45,114 @@ function initApp() {
     }
   };
 
+  console.log(`[${new Date().toLocaleTimeString()}] ⚙️ [Init Step 1/4] Binding Flatpickr date pickers...`);
   startPicker = flatpickr("#form-start-input", flatpickrConfig);
   endPicker = flatpickr("#form-end-input", flatpickrConfig);
 
+  console.log(`[${new Date().toLocaleTimeString()}] 🔑 [Init Step 2/4] Checking saved admin session...`);
   const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
   if (savedPwd) setAdminState(true, savedPwd);
 
   // ⚡ 1. อ่าน Cache ขึ้นมาแสดงผลบน UI ทันที (Instant Load)
+  console.log(`[${new Date().toLocaleTimeString()}] ⚡ [Init Step 3/4] Triggering Instant Cache Load...`);
   loadFromCache();
 
   // 📡 2. ยิง Silent Fetch ไปเทียบข้อมูลกับ GAS เบื้องหลัง
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Init Step 4/4] Triggering Background Server Sync...`);
   syncWithServer();
 
   setupDragAndDrop();
+  console.timeEnd('⏱️ App Initialization Time');
 }
 
 /**
  * ⚡ ดึงข้อมูลจาก LocalStorage แสดงผลบนหน้าเว็บทันที
  */
 function loadFromCache() {
+  console.time('⚡ Cache Load Time');
   const cachedRaw = localStorage.getItem(CACHE_KEY);
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
+      console.log(`[${new Date().toLocaleTimeString()}] 📦 [Cache] Loaded ${events.length} events from LocalStorage.`);
       filterEvents();
     } catch (e) {
-      console.error("⚠️ Cache corrupt:", e);
+      console.error(`[${new Date().toLocaleTimeString()}] ⚠️ [Cache Corrupt] Failed to parse cached data:`, e);
     }
+  } else {
+    console.log(`[${new Date().toLocaleTimeString()}] ℹ️ [Cache] No existing cache found in LocalStorage.`);
   }
+  console.timeEnd('⚡ Cache Load Time');
 }
 
 /**
  * 💾 บันทึกสเตทปัจจุบันลง Cache พร้อม Re-render หน้าเว็บ
  */
 function updateCacheAndRender(newEvents) {
+  console.time('💾 Local Cache & UI Render Time');
   events = newEvents;
   localStorage.setItem(CACHE_KEY, JSON.stringify(events));
+  console.log(`[${new Date().toLocaleTimeString()}] 💾 [Cache Saved] Updated ${events.length} events to LocalStorage.`);
   filterEvents();
+  console.timeEnd('💾 Local Cache & UI Render Time');
 }
 
 /**
  * 📡 Silent Fetch: ดึงข้อมูลสดจาก GAS แล้ว Compare เพื่ออัปเดตเฉพาะส่วนที่ต่าง
  */
 function syncWithServer() {
+  const syncStartTime = performance.now();
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Sending HTTP GET to GAS Backend...`);
+
   fetch(`${API_URL}?action=getEvents`)
-    .then(res => res.text())
+    .then(res => {
+      console.log(`[${new Date().toLocaleTimeString()}] 📥 [Sync Response] Raw HTTP response received. Status: ${res.status}`);
+      return res.text();
+    })
     .then(text => {
-      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) return;
+      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
+        console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Sync Warning] Response is not valid JSON. Content:`, text);
+        return;
+      }
       
       const result = JSON.parse(text);
+      const syncEndTime = performance.now();
+      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [Sync Duration] Server responded in ${(syncEndTime - syncStartTime).toFixed(2)} ms`);
+
       if (result.status === 'success' && Array.isArray(result.data)) {
         const serverEvents = result.data;
         const currentCacheRaw = localStorage.getItem(CACHE_KEY) || '[]';
         const serverRaw = JSON.stringify(serverEvents);
 
-        // Compare: ถ้าข้อมูลจาก Sheet ไม่ตรงกับ Cache หน้าเว็บ (เช่น มีรายการใหม่จากคนอื่น)
         if (currentCacheRaw !== serverRaw) {
-          console.log("🔄 พบข้อมูลใหม่จาก Server! กำลังอัปเดตแคชและหน้าเว็บ...");
+          console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Sync Diff] Data mismatch detected! Updating local cache with ${serverEvents.length} items from server.`);
           updateCacheAndRender(serverEvents);
+        } else {
+          console.log(`[${new Date().toLocaleTimeString()}] ✅ [Sync In Sync] Local cache is up-to-date with server. No UI re-render required.`);
         }
+      } else {
+        console.error(`[${new Date().toLocaleTimeString()}] ❌ [Sync Error] API status failed:`, result.message);
       }
     })
-    .catch(err => console.error("🚨 Background Sync Failed:", err));
+    .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Background network error:`, err));
 }
 
 // ==========================================================================
-// 🚀 Optimistic CRUD Actions (เขียน Cache ก่อน -> ยิง GAS เบื้องหลัง)
+// 🚀 Optimistic CRUD Actions
 // ==========================================================================
 
-/**
- * ➕/✏️ เพิ่มหรือแก้ไขกิจกรรม (Optimistic Update)
- */
 function handleFormSubmit(e) {
   e.preventDefault();
+  const actionType = document.getElementById('form-event-id').value ? 'UPDATE' : 'CREATE';
+  console.log(`[${new Date().toLocaleTimeString()}] 📝 [Form Submit] Executing ${actionType} Event Action...`);
+  console.time('🚀 Total Optimistic Submit Processing Time');
 
   const categoryCbs = document.querySelectorAll('.form-category-checkbox');
   const checkedCategories = [];
   categoryCbs.forEach(cb => { if (cb.checked) checkedCategories.push(cb.value); });
 
   if (checkedCategories.length === 0) {
+    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Validation Failed] No category selected.`);
     showToast('กรุณาเลือกประเภทหมวดหมู่บริการอย่างน้อย 1 ประเภท', 'error');
     return;
   }
@@ -128,13 +161,15 @@ function handleFormSubmit(e) {
   const endDateObj = endPicker.selectedDates[0];
 
   if (!startDateObj || !endDateObj || endDateObj <= startDateObj) {
+    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Validation Failed] Invalid date range.`);
     showToast('ช่วงเวลาไม่ถูกต้อง', 'error');
     return;
   }
 
   const eventId = document.getElementById('form-event-id').value;
+  const tempId = 'TEMP-' + Date.now();
   const eventData = {
-    ID: eventId || 'TEMP-' + Date.now(), // สร้าง ID ชั่วคราวก่อนถ้าเป็นรายการใหม่
+    ID: eventId || tempId,
     Title: document.getElementById('form-title-input').value.trim(),
     'Start Date': formatToSheetDate(startDateObj),
     'End Date': formatToSheetDate(endDateObj),
@@ -147,7 +182,8 @@ function handleFormSubmit(e) {
 
   closeFormModal();
 
-  // 1. ⚡ อัปเดต Cache + Render UI ทันทีไม่ต้องรอ network
+  // 1. ⚡ Optimistic UI Update ( Render ทันที 0ms )
+  console.log(`[${new Date().toLocaleTimeString()}] ⚡ [Optimistic UI] Updating UI locally with ID: ${eventData.ID}...`);
   let updatedEvents = [...events];
   if (eventId) {
     updatedEvents = updatedEvents.map(evt => evt.ID === eventId ? { ...evt, ...eventData } : evt);
@@ -156,8 +192,12 @@ function handleFormSubmit(e) {
   }
   updateCacheAndRender(updatedEvents);
   showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
+  console.timeEnd('🚀 Total Optimistic Submit Processing Time');
 
-  // 2. 📡 ยิงไปบันทึกลง Google Sheets เบื้องหลัง
+  // 2. 📡 Background Network Call
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Background POST] Sending payload to GAS Backend...`);
+  const apiStartTime = performance.now();
+
   const requestBody = {
     action: eventId ? 'updateEvent' : 'addEvent',
     eventData: {
@@ -184,35 +224,44 @@ function handleFormSubmit(e) {
   })
     .then(res => res.json())
     .then(result => {
+      const apiEndTime = performance.now();
+      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [GAS POST Complete] Background operation finished in ${(apiEndTime - apiStartTime).toFixed(2)} ms`);
+      
       if (result.status === 'success') {
-        // เมื่อ GAS บันทึกเสร็จ ให้ Sync ข้อมูลจริงกลับมาแทนที่ ID ชั่วคราว
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [GAS Success] Event saved to Sheet successfully. Syncing server state...`);
         syncWithServer();
       } else {
         throw new Error(result.message);
       }
     })
     .catch(err => {
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [GAS Failure] Failed to save to Sheet:`, err.message);
       showToast('เกิดข้อผิดพลาดในการบันทึกไปยัง Sheet: ' + err.message, 'error');
-      syncWithServer(); // Rollback/Re-sync ข้อมูลจริงหากบันทึกล้มเหลว
+      console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Rollback Sync] Fetching real server state to reconcile UI...`);
+      syncWithServer();
     });
 }
 
-/**
- * 🗑️ ลบกิจกรรม (Optimistic Delete)
- */
 function triggerDeleteEvent() {
   if (!selectedEvent) return;
   if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
 
   const targetId = selectedEvent.ID;
+  console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [Delete Initiated] ID: ${targetId} ("${selectedEvent.Title}")`);
+  console.time('🚀 Optimistic Delete Processing Time');
+
   closeDetailModal();
 
-  // 1. ⚡ ลบออกจาก Cache + UI ทันที
+  // 1. ⚡ Optimistic Delete UI
   const updatedEvents = events.filter(evt => evt.ID !== targetId);
   updateCacheAndRender(updatedEvents);
   showToast('ลบรายการเรียบร้อยแล้ว', 'success');
+  console.timeEnd('🚀 Optimistic Delete Processing Time');
 
-  // 2. 📡 ส่งคำสั่งลบไป GAS เบื้องหลัง
+  // 2. 📡 Background Network Delete Call
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Background POST] Requesting deletion on GAS Backend...`);
+  const apiStartTime = performance.now();
+
   fetch(API_URL, {
     method: 'POST',
     redirect: 'follow',
@@ -225,15 +274,21 @@ function triggerDeleteEvent() {
   })
     .then(res => res.json())
     .then(result => {
+      const apiEndTime = performance.now();
+      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [GAS Delete Complete] Deletion finished in ${(apiEndTime - apiStartTime).toFixed(2)} ms`);
+
       if (result.status === 'success') {
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [GAS Success] Item removed from Sheet & Drive. Re-verifying state...`);
         syncWithServer();
       } else {
         throw new Error(result.message);
       }
     })
     .catch(err => {
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Delete Failed] Could not delete on Sheet:`, err.message);
       showToast('ลบใน Sheet ไม่สำเร็จ: ' + err.message, 'error');
-      syncWithServer(); // Rollback หากเกิด Error
+      console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Rollback Sync] Restoring previous events from server...`);
+      syncWithServer();
     });
 }
 
@@ -254,6 +309,7 @@ function showLoader(show, text) {
 }
 
 function showToast(message, type = 'info') {
+  console.log(`[${new Date().toLocaleTimeString()}] 🔔 [Toast Notification] (${type.toUpperCase()}): ${message}`);
   const container = document.getElementById('toast-container');
   if (!container) return;
   const toast = document.createElement('div');
@@ -281,6 +337,8 @@ function closeAdminModal() { document.getElementById('admin-modal').classList.re
 function setAdminState(adminLogged, password) {
   isAdmin = adminLogged;
   adminPassword = password;
+  console.log(`[${new Date().toLocaleTimeString()}] 🔒 [Admin Auth State] Logged in: ${isAdmin}`);
+  
   const statusBadge = document.getElementById('admin-status');
   const statusText = document.getElementById('admin-status-text');
   const actionBtn = document.getElementById('admin-action-btn');
@@ -368,7 +426,7 @@ function parseSheetDate(dateStr) {
         return new Date(year, month, day, parseInt(tParts[0], 10) || 0, parseInt(tParts[1], 10) || 0, parseInt(tParts[2], 10) || 0);
       }
     }
-  } catch (e) { console.error("Parse Error Date:", dateStr); }
+  } catch (e) { console.error(`[${new Date().toLocaleTimeString()}] Parse Error Date:`, dateStr); }
   return null;
 }
 
@@ -423,11 +481,13 @@ function filterEvents() {
     return matchText && matchCategory;
   });
 
+  console.log(`[${new Date().toLocaleTimeString()}] 🔍 [Filter Events] ${filteredEvents.length}/${events.length} events matched criteria.`);
   renderCalendar();
 }
 
 function switchView(view) {
   currentView = view;
+  console.log(`[${new Date().toLocaleTimeString()}] 👁️ [View Switch] Changed calendar view to: ${view}`);
   document.getElementById('view-month-btn').classList.toggle('active', view === 'month');
   document.getElementById('view-week-btn').classList.toggle('active', view === 'week');
   document.getElementById('calendar-grid').classList.toggle('week-view', view === 'week');
@@ -449,6 +509,7 @@ function navigateToday() {
 }
 
 function renderCalendar() {
+  console.time('🎨 Calendar Render Time');
   const grid = document.getElementById('calendar-grid');
   if (!grid) return;
   grid.innerHTML = '';
@@ -472,6 +533,7 @@ function renderCalendar() {
     renderWeekView(grid);
   }
   updateDashboard();
+  console.timeEnd('🎨 Calendar Render Time');
 }
 
 function renderMonthView(gridContainer) {
@@ -580,6 +642,7 @@ function getEventsForDate(targetDate) {
 }
 
 function openDetailModal(eventObj) {
+  console.log(`[${new Date().toLocaleTimeString()}] 🔍 [View Detail] Opening modal for event ID: ${eventObj.ID}`);
   selectedEvent = eventObj;
   document.getElementById('detail-title').innerText = eventObj.Title;
   document.getElementById('detail-start').innerText = formatDisplayDate(eventObj['Start Date']);
@@ -625,6 +688,7 @@ function closeDetailModal() {
 
 function triggerEditEvent() {
   if (!selectedEvent) return;
+  console.log(`[${new Date().toLocaleTimeString()}] ✏️ [Edit Triggered] Preparing form for ID: ${selectedEvent.ID}`);
   closeDetailModal();
 
   document.getElementById('form-event-id').value = selectedEvent.ID;
@@ -646,6 +710,7 @@ function triggerEditEvent() {
 }
 
 function openAddEventModal() {
+  console.log(`[${new Date().toLocaleTimeString()}] ➕ [Add Event] Opening new event modal...`);
   document.getElementById('form-event-id').value = '';
   document.getElementById('form-title-input').value = '';
   document.getElementById('form-desc-input').value = '';
@@ -670,7 +735,10 @@ function closeFormModal() { document.getElementById('form-modal').classList.remo
 function handleFileSelection(event) {
   const file = event.target.files[0];
   if (!file) return;
+  console.log(`[${new Date().toLocaleTimeString()}] 📁 [File Selected] File Name: ${file.name}, Size: ${(file.size / 1024).toFixed(1)} KB`);
+
   if (file.size > 10 * 1024 * 1024) {
+    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [File Oversized] Selected file exceeds 10MB limit.`);
     showToast('ไฟล์มีขนาดเกินข้อกำหนดสูงสุด (10MB)', 'error');
     clearFileSelection();
     return;
@@ -682,6 +750,7 @@ function handleFileSelection(event) {
       name: file.name,
       mimeType: file.type
     };
+    console.log(`[${new Date().toLocaleTimeString()}] 📁 [Base64 Conversion] File converted to Base64 stream.`);
     document.getElementById('selected-file-name').innerText = file.name;
     document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
     document.getElementById('selected-file-display').classList.remove('hidden');
