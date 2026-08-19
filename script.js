@@ -101,12 +101,13 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 Database
+ * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 (Hot) & GAS (Cold/KV Cache)
  */
 function syncWithServer() {
   const syncStartTime = performance.now();
-  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching events from Cloudflare D1...`);
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching Hot Events from D1...`);
 
+  // 1. ดึง Hot Data หลักจาก D1
   fetch(`${WORKER_API_URL}`)
     .then(res => {
       if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
@@ -130,18 +131,71 @@ function syncWithServer() {
           Timestamp: item.created_at || ''
         }));
 
-        const currentCacheRaw = localStorage.getItem(CACHE_KEY) || '[]';
-        const serverRaw = JSON.stringify(mappedEvents);
-
-        if (currentCacheRaw !== serverRaw) {
-          console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Sync Diff] Updating cache with ${mappedEvents.length} items from D1.`);
-          updateCacheAndRender(mappedEvents);
-        } else {
-          console.log(`[${new Date().toLocaleTimeString()}] ✅ [Sync In Sync] Cache up-to-date.`);
-        }
+        mergeEventsToCache(mappedEvents);
       }
+
+      // 2. แอบสั่งดึง Cold Data ของเดือนก่อน/หลัง ล่วงหน้าเบื้องหลัง
+      fetchColdMonthsData(currentDate.getFullYear(), currentDate.getMonth() + 1);
     })
     .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Error fetching from D1:`, err));
+}
+
+/**
+ * ❄️ ฟังก์ชันดึงข้อมูล Cold Data (เดือนเก่า/ล่วงหน้า) จาก Worker KV -> GAS
+ */
+function fetchColdMonthsData(year, month) {
+  // สร้างรายการเดือนที่ต้องการ Prefetch: [เดือนก่อนหน้า, เดือนถัดไป 1, เดือนถัดไป 2]
+  const monthsToFetch = [
+    getOffsetYearMonth(year, month, -1),
+    getOffsetYearMonth(year, month, 1),
+    getOffsetYearMonth(year, month, 2)
+  ];
+
+  monthsToFetch.forEach(({ y, m }) => {
+    fetch(`${WORKER_API_URL}?source=cold&year=${y}&month=${m}`)
+      .then(res => res.json())
+      .then(coldEvents => {
+        if (Array.isArray(coldEvents) && coldEvents.length > 0) {
+          const mappedColdEvents = coldEvents.map(item => ({
+            ID: item.id || item.ID,
+            Title: item.title || item.Title || '',
+            'Start Date': item.startDate || item['Start Date'] || item.start_date || '',
+            'End Date': item.endDate || item['End Date'] || item.end_date || '',
+            Categories: item.categories || item.Categories || '',
+            Description: item.description || item.Description || '',
+            Coordinator: item.coordinator || item.Coordinator || '',
+            President: item.president || item.President || '',
+            'Attachment URL': item.file_url || item.fileUrl || item['Attachment URL'] || '',
+            Timestamp: item.timestamp || item.Timestamp || ''
+          }));
+
+          mergeEventsToCache(mappedColdEvents);
+        }
+      })
+      .catch(err => console.warn(`[Cold Fetch Warning] Failed for ${y}-${m}:`, err));
+  });
+}
+
+function getOffsetYearMonth(year, month, offset) {
+  const d = new Date(year, month - 1 + offset, 1);
+  return { y: d.getFullYear(), m: d.getMonth() + 1 };
+}
+
+/**
+ * 🔄 รวมข้อมูลใหม่เข้ากับ Events เดิมโดยไม่ให้รายการซ้ำกัน
+ */
+function mergeEventsToCache(newItems) {
+  const eventMap = new Map();
+  // ใส่ของเดิมก่อน
+  events.forEach(item => { if (item.ID) eventMap.set(String(item.ID), item); });
+  // ใส่ของใหม่ทับ/เพิ่ม
+  newItems.forEach(item => { if (item.ID) eventMap.set(String(item.ID), item); });
+
+  const merged = Array.from(eventMap.values());
+  if (JSON.stringify(merged) !== JSON.stringify(events)) {
+    console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Merge Events] Updated event store (${merged.length} items).`);
+    updateCacheAndRender(merged);
+  }
 }
 
 /**
@@ -250,9 +304,6 @@ async function handleFormSubmit(e) {
   updateCacheAndRender(updatedEvents);
   showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
 
-  // 🛠️ แก้ไข Payload เพื่อป้องกัน SQLITE_MISMATCH:
-  // ไม่ส่ง id string ในกรณีสร้างใหม่ (ให้ SQLite Auto Increment เอง) 
-  // และส่งเป็น Number เสมอหากเป็นการแก้ไข
   const payload = {
     title: eventData.Title,
     start_date: eventData['Start Date'],
@@ -264,7 +315,6 @@ async function handleFormSubmit(e) {
     file_url: uploadedFileUrl || ''
   };
 
-  // ส่ง id ไปเป็น String (ห้ามใช้ Number(eventId))
   if (eventId && !String(eventId).startsWith('TEMP-')) {
     payload.id = eventId; 
   }
@@ -537,11 +587,15 @@ function navigateCalendar(direction) {
   } else {
     currentDate.setDate(currentDate.getDate() + (direction * 7));
   }
+  
+  // สั่งแอบดึงข้อมูลของเดือนที่ผู้ใช้เพิ่งกดเปลี่ยนไปเบื้องหลัง
+  fetchColdMonthsData(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
 
 function navigateToday() {
   currentDate = new Date();
+  fetchColdMonthsData(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
 
