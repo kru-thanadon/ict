@@ -1,27 +1,20 @@
 // ========================================================================== 
-// External Website Calendar JS Engine (API Connected + Smart Cache)
+// External Website Calendar JS Engine (GAS Backend + Optimistic Cache Engine)
 // ==========================================================================
 
-// 🔴 นำ URL Web App ของ Google Apps Script มาใส่ที่นี่ 🔴
 const API_URL = 'https://script.google.com/macros/s/AKfycbw5ufgADxQXqvm40HfAmKfoE4d5S1DvddgZ5ZgXIQwGYhFng5iKz3Ykhuvps6c1Kygt/exec';
-
-// Key สำหรับเก็บบันทึก Cache ลงใน LocalStorage
 const CACHE_KEY = 'gas_calendar_events_cache';
 
-// Global Application State
 let currentDate = new Date();
-let currentView = 'month'; // 'month' or 'week'
+let currentView = 'month';
 let events = [];
 let filteredEvents = [];
 let isAdmin = false;
 let adminPassword = '';
 let selectedEvent = null;
 
-// ตัวแปรเก็บ Instance ปฏิทิน Flatpickr สำหรับฟอร์มควบคุม
 let startPicker = null;
 let endPicker = null;
-
-// File Upload State
 let selectedFile = null;
 let deleteExistingAttachment = false;
 
@@ -30,12 +23,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (typeof initTheme === 'function') initTheme();
 });
 
-/**
- * ตั้งค่าเริ่มต้นแอป และโหลดปฏิทิน (พร้อมตั้งค่า Flatpickr ปี พ.ศ.)
- */
 function initApp() {
-  console.log("🚀 [System] เริ่มต้นระบบปฏิทินงานประสานผ่าน API (Smart Cache Active)...");
-
   const flatpickrConfig = {
     enableTime: true,
     dateFormat: "Y-m-d H:i:S",
@@ -43,7 +31,7 @@ function initApp() {
     altInputClass: "form-control",
     locale: "th",
     time_24hr: true,
-    formatDate: function (date, formatStr, locale) {
+    formatDate: function (date) {
       const day = date.getDate();
       const month = THAI_MONTHS_FULL[date.getMonth()];
       const year = date.getFullYear() + 543;
@@ -56,146 +44,243 @@ function initApp() {
   startPicker = flatpickr("#form-start-input", flatpickrConfig);
   endPicker = flatpickr("#form-end-input", flatpickrConfig);
 
-  // โหลดสิทธิ์ Admin จาก LocalStorage ของเบราว์เซอร์
   const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
-  if (savedPwd) {
-    setAdminState(true, savedPwd);
-  }
+  if (savedPwd) setAdminState(true, savedPwd);
 
-  loadEventsFromServer();
+  // ⚡ 1. อ่าน Cache ขึ้นมาแสดงผลบน UI ทันที (Instant Load)
+  loadFromCache();
+
+  // 📡 2. ยิง Silent Fetch ไปเทียบข้อมูลกับ GAS เบื้องหลัง
+  syncWithServer();
+
   setupDragAndDrop();
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรม (Silent Sync + Safety Guard & Detailed Logging)
+ * ⚡ ดึงข้อมูลจาก LocalStorage แสดงผลบนหน้าเว็บทันที
  */
-function loadEventsFromServer() {
-  const startTime = performance.now();
-  console.log("🚀 [System Sync] เริ่มกระบวนการโหลดและประสานข้อมูลระบบ...");
-
-  // 1. อ่าน Cache ในเครื่องมาแสดงบนหน้าจอทันที
+function loadFromCache() {
   const cachedRaw = localStorage.getItem(CACHE_KEY);
-
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
-      const cacheTime = (performance.now() - startTime).toFixed(2);
-      console.log(`⚡ [Cache Loaded] แสดงผลจาก Local Cache สำเร็จ (${events.length} รายการ) | ใช้เวลา: ${cacheTime} ms`);
-      
       filterEvents();
-      showLoader(false); // ปิดหน้าหมุนทันที
     } catch (e) {
-      console.error("⚠️ [Cache Error] รูปแบบ Cache เสียหาย:", e);
+      console.error("⚠️ Cache corrupt:", e);
     }
-  } else {
-    console.log("ℹ️ [Cache Info] ไม่พบข้อมูลใน Local Cache (ระบบจะรอรับข้อมูลจาก API)...");
+  }
+}
+
+/**
+ * 💾 บันทึกสเตทปัจจุบันลง Cache พร้อม Re-render หน้าเว็บ
+ */
+function updateCacheAndRender(newEvents) {
+  events = newEvents;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(events));
+  filterEvents();
+}
+
+/**
+ * 📡 Silent Fetch: ดึงข้อมูลสดจาก GAS แล้ว Compare เพื่ออัปเดตเฉพาะส่วนที่ต่าง
+ */
+function syncWithServer() {
+  fetch(`${API_URL}?action=getEvents`)
+    .then(res => res.text())
+    .then(text => {
+      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) return;
+      
+      const result = JSON.parse(text);
+      if (result.status === 'success' && Array.isArray(result.data)) {
+        const serverEvents = result.data;
+        const currentCacheRaw = localStorage.getItem(CACHE_KEY) || '[]';
+        const serverRaw = JSON.stringify(serverEvents);
+
+        // Compare: ถ้าข้อมูลจาก Sheet ไม่ตรงกับ Cache หน้าเว็บ (เช่น มีรายการใหม่จากคนอื่น)
+        if (currentCacheRaw !== serverRaw) {
+          console.log("🔄 พบข้อมูลใหม่จาก Server! กำลังอัปเดตแคชและหน้าเว็บ...");
+          updateCacheAndRender(serverEvents);
+        }
+      }
+    })
+    .catch(err => console.error("🚨 Background Sync Failed:", err));
+}
+
+// ==========================================================================
+// 🚀 Optimistic CRUD Actions (เขียน Cache ก่อน -> ยิง GAS เบื้องหลัง)
+// ==========================================================================
+
+/**
+ * ➕/✏️ เพิ่มหรือแก้ไขกิจกรรม (Optimistic Update)
+ */
+function handleFormSubmit(e) {
+  e.preventDefault();
+
+  const categoryCbs = document.querySelectorAll('.form-category-checkbox');
+  const checkedCategories = [];
+  categoryCbs.forEach(cb => { if (cb.checked) checkedCategories.push(cb.value); });
+
+  if (checkedCategories.length === 0) {
+    showToast('กรุณาเลือกประเภทหมวดหมู่บริการอย่างน้อย 1 ประเภท', 'error');
+    return;
   }
 
-  // 2. ดึงข้อมูลสดจาก GAS เบื้องหลัง
-  console.log("📡 [Background Sync] กำลังส่ง Request ไปยัง Google Apps Script API...");
-  const apiStartTime = performance.now();
+  const startDateObj = startPicker.selectedDates[0];
+  const endDateObj = endPicker.selectedDates[0];
 
-  fetch(`${API_URL}?action=getEvents`)
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`HTTP Error Status: ${response.status}`);
-      }
-      return response.text(); // อ่านเป็น Text ก่อนเพื่อเช็คว่าเป็น JSON จริงหรือไม่ ป้องกัน SyntaxError
-    })
-    .then(text => {
-      const apiDuration = (performance.now() - apiStartTime).toFixed(2);
-      showLoader(false);
+  if (!startDateObj || !endDateObj || endDateObj <= startDateObj) {
+    showToast('ช่วงเวลาไม่ถูกต้อง', 'error');
+    return;
+  }
 
-      // เช็คว่า response ตอบกลับมาเป็น HTML ( Error Page) หรือไม่
-      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
-        throw new Error("API ตอบกลับเป็น HTML/Text ไม่ใช่ JSON (ลิงก์ GAS อาจหมดอายุ หรือยังไม่ได้ตั้งค่า Permission เป็น Anyone)");
-      }
+  const eventId = document.getElementById('form-event-id').value;
+  const eventData = {
+    ID: eventId || 'TEMP-' + Date.now(), // สร้าง ID ชั่วคราวก่อนถ้าเป็นรายการใหม่
+    Title: document.getElementById('form-title-input').value.trim(),
+    'Start Date': formatToSheetDate(startDateObj),
+    'End Date': formatToSheetDate(endDateObj),
+    Categories: checkedCategories.join(', '),
+    Description: document.getElementById('form-desc-input').value.trim(),
+    Coordinator: document.getElementById('form-coordinator-input') ? document.getElementById('form-coordinator-input').value.trim() : '',
+    President: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : '',
+    Timestamp: formatToSheetDate(new Date())
+  };
 
-      const result = JSON.parse(text);
+  closeFormModal();
 
-      if (result.status === 'success' && Array.isArray(result.data)) {
-        console.log(`📥 [API Response] ได้รับข้อมูลสดจาก GAS สำเร็จ | เวลาตอบกลับ API: ${apiDuration} ms`);
-        
-        const freshEvents = result.data;
-        const freshRaw = JSON.stringify(freshEvents);
+  // 1. ⚡ อัปเดต Cache + Render UI ทันทีไม่ต้องรอ network
+  let updatedEvents = [...events];
+  if (eventId) {
+    updatedEvents = updatedEvents.map(evt => evt.ID === eventId ? { ...evt, ...eventData } : evt);
+  } else {
+    updatedEvents.push(eventData);
+  }
+  updateCacheAndRender(updatedEvents);
+  showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
 
-        // 3. ตรวจสอบการเปลี่ยนแปลงของข้อมูล
-        if (freshRaw !== cachedRaw) {
-          console.log("🔄 [Data Changed] พบการเปลี่ยนแปลงของข้อมูล! กำลังบันทึก Cache และวาดตารางใหม่...");
-          
-          localStorage.setItem(CACHE_KEY, freshRaw);
-          events = freshEvents;
-          filterEvents();
+  // 2. 📡 ยิงไปบันทึกลง Google Sheets เบื้องหลัง
+  const requestBody = {
+    action: eventId ? 'updateEvent' : 'addEvent',
+    eventData: {
+      id: eventId,
+      title: eventData.Title,
+      startDate: eventData['Start Date'],
+      endDate: eventData['End Date'],
+      categories: eventData.Categories,
+      description: eventData.Description,
+      coordinator: eventData.Coordinator,
+      president: eventData.President,
+      deleteExistingAttachment: deleteExistingAttachment
+    },
+    fileData: selectedFile || null
+  };
 
-          const totalTime = (performance.now() - startTime).toFixed(2);
-          console.log(`✅ [Sync Completed] อัปเดตตารางหน้าเว็บเรียบร้อยแล้ว! | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
-        } else {
-          const totalTime = (performance.now() - startTime).toFixed(2);
-          console.log(`✅ [Sync Completed] ข้อมูลเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ซ้ำ | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
-        }
+  if (eventId) requestBody.adminPassword = adminPassword;
+
+  fetch(API_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(requestBody)
+  })
+    .then(res => res.json())
+    .then(result => {
+      if (result.status === 'success') {
+        // เมื่อ GAS บันทึกเสร็จ ให้ Sync ข้อมูลจริงกลับมาแทนที่ ID ชั่วคราว
+        syncWithServer();
       } else {
-        throw new Error(result.message || 'โครงสร้างข้อมูลตอบกลับไม่ถูกต้อง');
+        throw new Error(result.message);
       }
     })
     .catch(err => {
-      const apiDuration = (performance.now() - apiStartTime).toFixed(2);
-      console.error(`🚨 [Sync Failed] การดึงข้อมูลเบื้องหลังล้มเหลว (${apiDuration} ms):`, err.message);
-      showLoader(false); // ปิด Loader เสมอแม้จะเกิด Error
+      showToast('เกิดข้อผิดพลาดในการบันทึกไปยัง Sheet: ' + err.message, 'error');
+      syncWithServer(); // Rollback/Re-sync ข้อมูลจริงหากบันทึกล้มเหลว
     });
 }
 
-function clearEventsCache() {
-  // ไม่ล้าง Cache เพื่อรักษาการดึงข้อมูลจากเครื่อง
+/**
+ * 🗑️ ลบกิจกรรม (Optimistic Delete)
+ */
+function triggerDeleteEvent() {
+  if (!selectedEvent) return;
+  if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
+
+  const targetId = selectedEvent.ID;
+  closeDetailModal();
+
+  // 1. ⚡ ลบออกจาก Cache + UI ทันที
+  const updatedEvents = events.filter(evt => evt.ID !== targetId);
+  updateCacheAndRender(updatedEvents);
+  showToast('ลบรายการเรียบร้อยแล้ว', 'success');
+
+  // 2. 📡 ส่งคำสั่งลบไป GAS เบื้องหลัง
+  fetch(API_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'deleteEvent',
+      eventId: targetId,
+      adminPassword: adminPassword
+    })
+  })
+    .then(res => res.json())
+    .then(result => {
+      if (result.status === 'success') {
+        syncWithServer();
+      } else {
+        throw new Error(result.message);
+      }
+    })
+    .catch(err => {
+      showToast('ลบใน Sheet ไม่สำเร็จ: ' + err.message, 'error');
+      syncWithServer(); // Rollback หากเกิด Error
+    });
 }
+
+// ==========================================================================
+// Utility Helper & UI Rendering functions
+// ==========================================================================
+
 function showLoader(show, text) {
-  const loaderTextValue = text || 'กำลังทำงาน...';
   const loader = document.getElementById('loading-overlay');
   if (!loader) return;
   const loaderText = loader.querySelector('.loading-text');
   if (show) {
-    if (loaderText) loaderText.innerText = loaderTextValue;
+    if (loaderText) loaderText.innerText = text || 'กำลังทำงาน...';
     loader.classList.add('active');
   } else {
     loader.classList.remove('active');
   }
 }
 
-function showToast(message, type) {
-  const toastType = type || 'info';
+function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
   if (!container) return;
   const toast = document.createElement('div');
-  toast.className = 'toast toast-' + toastType;
+  toast.className = 'toast toast-' + type;
 
   let icon = '<i class="fa-solid fa-info-circle toast-icon"></i>';
-  if (toastType === 'success') icon = '<i class="fa-solid fa-circle-check toast-icon"></i>';
-  if (toastType === 'error') icon = '<i class="fa-solid fa-circle-exclamation toast-icon"></i>';
+  if (type === 'success') icon = '<i class="fa-solid fa-circle-check toast-icon"></i>';
+  if (type === 'error') icon = '<i class="fa-solid fa-circle-exclamation toast-icon"></i>';
 
   toast.innerHTML = icon + '\n<span class="toast-message">' + message + '</span>';
-
   container.appendChild(toast);
   setTimeout(() => {
     toast.style.animation = 'slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse forwards';
     setTimeout(() => toast.remove(), 300);
-  }, 4000);
+  }, 3500);
 }
 
-// ==========================================================================
-// Admin Authorization Sessions
-// ==========================================================================
 function openAdminModal() {
   document.getElementById('admin-password-input').value = '';
   document.getElementById('admin-login-error').classList.add('hidden');
   document.getElementById('admin-modal').classList.add('active');
 }
-function closeAdminModal() {
-  document.getElementById('admin-modal').classList.remove('active');
-}
+function closeAdminModal() { document.getElementById('admin-modal').classList.remove('active'); }
 
 function setAdminState(adminLogged, password) {
   isAdmin = adminLogged;
   adminPassword = password;
-
   const statusBadge = document.getElementById('admin-status');
   const statusText = document.getElementById('admin-status-text');
   const actionBtn = document.getElementById('admin-action-btn');
@@ -215,18 +300,16 @@ function setAdminState(adminLogged, password) {
       actionBtn.setAttribute('onclick', 'openAdminModal()');
     }
   }
-
   updateAdminActionButtonsVisibility();
 }
 
 function submitAdminPassword() {
   const pwdInput = document.getElementById('admin-password-input').value;
   if (!pwdInput) return;
-
   localStorage.setItem('gas_calendar_admin_pwd', pwdInput);
   setAdminState(true, pwdInput);
   closeAdminModal();
-  showToast('สแตนด์บายสิทธิ์ผู้ดูแลระบบ (ระบบจะตรวจสอบอีกครั้งเมื่อมีการแก้ไข)', 'info');
+  showToast('ยืนยันสิทธิ์ผู้ดูแลระบบแล้ว', 'info');
 }
 
 function logoutAdmin() {
@@ -247,30 +330,19 @@ function updateAdminActionButtonsVisibility() {
   }
 }
 
-// ==========================================================================
-// Date Utility & Parse Engine
-// ==========================================================================
 function parseSheetDate(dateStr) {
   if (!dateStr) return null;
-
   let cleanStr = String(dateStr).replace(/\(.*?\)/g, '').trim();
-
   const autoDate = new Date(cleanStr);
-  if (!isNaN(autoDate.getTime())) {
-    return autoDate;
-  }
+  if (!isNaN(autoDate.getTime())) return autoDate;
 
   try {
     cleanStr = cleanStr.replace('T', ' ');
     const parts = cleanStr.split(' ');
-
     const thaiMonths = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
     let thaiMonthIndex = -1;
     for (let i = 0; i < thaiMonths.length; i++) {
-      if (cleanStr.includes(thaiMonths[i])) {
-        thaiMonthIndex = i;
-        break;
-      }
+      if (cleanStr.includes(thaiMonths[i])) { thaiMonthIndex = i; break; }
     }
 
     if (thaiMonthIndex !== -1) {
@@ -284,32 +356,19 @@ function parseSheetDate(dateStr) {
       const datePart = parts[0];
       const timePart = parts[1] || '00:00:00';
       const separator = datePart.includes('-') ? '-' : (datePart.includes('/') ? '/' : null);
-
       if (separator) {
         const dParts = datePart.split(separator);
         const tParts = timePart.split(':');
         let year, month, day;
-
         if (dParts[0].length === 4) {
           year = parseInt(dParts[0], 10); month = parseInt(dParts[1], 10) - 1; day = parseInt(dParts[2], 10);
-        } else if (dParts[2].length === 4) {
-          year = parseInt(dParts[2], 10); let p0 = parseInt(dParts[0], 10); let p1 = parseInt(dParts[1], 10);
-          if (p0 > 12) { day = p0; month = p1 - 1; } else { month = p0 - 1; day = p1; }
         } else {
           day = parseInt(dParts[0], 10); month = parseInt(dParts[1], 10) - 1; year = parseInt(dParts[2], 10);
         }
-
-        const h = parseInt(tParts[0], 10) || 0;
-        const m = parseInt(tParts[1], 10) || 0;
-        const s = parseInt(tParts[2], 10) || 0;
-
-        return new Date(year, month, day, h, m, s);
+        return new Date(year, month, day, parseInt(tParts[0], 10) || 0, parseInt(tParts[1], 10) || 0, parseInt(tParts[2], 10) || 0);
       }
     }
-  } catch (e) {
-    console.error("Parse Error Date:", dateStr);
-  }
-
+  } catch (e) { console.error("Parse Error Date:", dateStr); }
   return null;
 }
 
@@ -320,19 +379,17 @@ function formatToSheetDate(date) {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
-  return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 function formatDisplayDate(dateStr) {
   const date = parseSheetDate(dateStr);
   if (!date) return '-';
-
   const day = date.getDate();
   const month = THAI_MONTHS_FULL[date.getMonth()];
   const year = date.getFullYear() + 543;
   const time = String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0') + ' น.';
-
-  return day + ' ' + month + ' ' + year + ' เวลา ' + time;
+  return `${day} ${month} ${year} เวลา ${time}`;
 }
 
 const THAI_MONTHS_FULL = [
@@ -340,9 +397,6 @@ const THAI_MONTHS_FULL = [
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
 ];
 
-// ==========================================================================
-// Filtering & Search mechanics
-// ==========================================================================
 function getSelectedCategoryFilters() {
   const checkboxes = document.querySelectorAll('.category-filter-checkbox');
   const selected = [];
@@ -364,8 +418,7 @@ function filterEvents() {
       (evt.President && evt.President.toLowerCase().includes(searchQuery));
 
     const eventCats = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
-    const matchCategory = eventCats.some(cat => selectedCategories.includes(cat)) ||
-      (eventCats.length === 0 && selectedCategories.length === 0);
+    const matchCategory = eventCats.some(cat => selectedCategories.includes(cat)) || (eventCats.length === 0 && selectedCategories.length === 0);
 
     return matchText && matchCategory;
   });
@@ -373,9 +426,6 @@ function filterEvents() {
   renderCalendar();
 }
 
-// ==========================================================================
-// Calendar Views Rendering engine
-// ==========================================================================
 function switchView(view) {
   currentView = view;
   document.getElementById('view-month-btn').classList.toggle('active', view === 'month');
@@ -414,7 +464,6 @@ function renderCalendar() {
     const sunDate = getSundayOfWeek(currentDate);
     const satDate = new Date(sunDate);
     satDate.setDate(sunDate.getDate() + 6);
-
     const startStr = sunDate.getDate() + ' ' + THAI_MONTHS_FULL[sunDate.getMonth()] + ' ' + (sunDate.getFullYear() + 543);
     const endStr = satDate.getDate() + ' ' + THAI_MONTHS_FULL[satDate.getMonth()] + ' ' + (satDate.getFullYear() + 543);
 
@@ -422,7 +471,6 @@ function renderCalendar() {
     document.getElementById('sidebar-month-display').innerText = currentMonthName + ' ' + currentYearBE;
     renderWeekView(grid);
   }
-
   updateDashboard();
 }
 
@@ -436,23 +484,15 @@ function renderMonthView(gridContainer) {
   const today = new Date();
 
   for (let i = firstDayIndex - 1; i >= 0; i--) {
-    const dayNum = prevMonthTotalDays - i;
-    const dateObj = new Date(year, month - 1, dayNum);
-    createDayCell(gridContainer, dayNum, dateObj, true);
+    createDayCell(gridContainer, prevMonthTotalDays - i, new Date(year, month - 1, prevMonthTotalDays - i), true);
   }
-
   for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
     const dateObj = new Date(year, month, dayNum);
-    const isToday = dateObj.toDateString() === today.toDateString();
-    createDayCell(gridContainer, dayNum, dateObj, false, isToday);
+    createDayCell(gridContainer, dayNum, dateObj, false, dateObj.toDateString() === today.toDateString());
   }
-
-  const totalCells = gridContainer.children.length;
-  const remainingCells = 42 - totalCells;
-
+  const remainingCells = 42 - gridContainer.children.length;
   for (let dayNum = 1; dayNum <= remainingCells; dayNum++) {
-    const dateObj = new Date(year, month + 1, dayNum);
-    createDayCell(gridContainer, dayNum, dateObj, true);
+    createDayCell(gridContainer, dayNum, new Date(year, month + 1, dayNum), true);
   }
 }
 
@@ -462,16 +502,14 @@ function renderWeekView(gridContainer) {
   for (let i = 0; i < 7; i++) {
     const dateObj = new Date(sunday);
     dateObj.setDate(sunday.getDate() + i);
-    const isToday = dateObj.toDateString() === today.toDateString();
-    createDayCell(gridContainer, dateObj.getDate(), dateObj, false, isToday);
+    createDayCell(gridContainer, dateObj.getDate(), dateObj, false, dateObj.toDateString() === today.toDateString());
   }
 }
 
 function getSundayOfWeek(d) {
   const date = new Date(d);
   const day = date.getDay();
-  const diff = date.getDate() - day;
-  return new Date(date.setDate(diff));
+  return new Date(date.setDate(date.getDate() - day));
 }
 
 function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
@@ -482,7 +520,6 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
 
   const header = document.createElement('div');
   header.className = 'day-header';
-
   const numSpan = document.createElement('span');
   numSpan.className = 'day-number';
   numSpan.innerText = dayNumber;
@@ -492,12 +529,9 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
   const eventsList = document.createElement('div');
   eventsList.className = 'day-events-container';
 
-  const eventsOnDay = getEventsForDate(dateObj);
-
-  eventsOnDay.forEach(evt => {
+  getEventsForDate(dateObj).forEach(evt => {
     const chip = document.createElement('div');
     chip.className = 'event-chip';
-
     const categoriesList = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
 
     if (categoriesList.length === 1) {
@@ -510,7 +544,6 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
       chip.classList.add('chip-multi');
       const dotsContainer = document.createElement('div');
       dotsContainer.className = 'chip-categories-dots';
-
       categoriesList.forEach(cat => {
         const dot = document.createElement('span');
         dot.className = 'dot-indicator';
@@ -526,12 +559,7 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
     const titleText = document.createElement('span');
     titleText.innerText = evt.Title;
     chip.appendChild(titleText);
-
-    chip.onclick = function (e) {
-      e.stopPropagation();
-      openDetailModal(evt);
-    };
-
+    chip.onclick = (e) => { e.stopPropagation(); openDetailModal(evt); };
     eventsList.appendChild(chip);
   });
 
@@ -541,71 +569,31 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
 
 function getEventsForDate(targetDate) {
   const compareDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-
   return filteredEvents.filter(evt => {
     const sDate = parseSheetDate(evt['Start Date']);
     const eDate = parseSheetDate(evt['End Date']);
     if (!sDate || !eDate) return false;
-
     const startDateClean = new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate());
     const endDateClean = new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
-
     return compareDate >= startDateClean && compareDate <= endDateClean;
   });
 }
 
-// ==========================================================================
-// Modal View detail
-// ==========================================================================
 function openDetailModal(eventObj) {
   selectedEvent = eventObj;
-
   document.getElementById('detail-title').innerText = eventObj.Title;
   document.getElementById('detail-start').innerText = formatDisplayDate(eventObj['Start Date']);
   document.getElementById('detail-end').innerText = formatDisplayDate(eventObj['End Date']);
-  document.getElementById('detail-desc').innerText = eventObj.Description || 'ไม่มีรายละเอียดการจองประสานงาน';
+  document.getElementById('detail-desc').innerText = eventObj.Description || 'ไม่มีรายละเอียด';
   document.getElementById('detail-id').innerText = eventObj.ID;
-  const coordinatorEl = document.getElementById('detail-coordinator');
-  if (coordinatorEl) {
-    coordinatorEl.innerText = eventObj.Coordinator || 'ไม่มีข้อมูลผู้ประสานงาน';
-  }
 
-  const presidentEl = document.getElementById('detail-president');
-  if (presidentEl) {
-    presidentEl.innerText = eventObj.President || 'ไม่มีข้อมูลประธาน / ผู้กล่าวเปิดงาน';
-  }
-
-  const timestampEl = document.getElementById('detail-timestamp');
-  if (timestampEl) {
-    const rawTime = eventObj.Timestamp;
-    timestampEl.innerText = rawTime ? formatDisplayDate(rawTime) : 'ไม่มีข้อมูล';
-  }
-
-  const warningEl = document.getElementById('detail-warning-notice');
-
-  const startDateObj = parseSheetDate(eventObj['Start Date']);
-  const rawTime = eventObj.Timestamp;
-  const timestampObj = parseSheetDate(rawTime);
-
-  if (startDateObj && timestampObj) {
-    const diffInMs = startDateObj - timestampObj;
-    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
-
-    if (diffInDays < 3) {
-      if (warningEl) {
-        warningEl.innerText = '⚠️ กรุณาติดต่อล่วงหน้าอย่างน้อย 3 วัน';
-        warningEl.classList.remove('hidden');
-      }
-    } else {
-      if (warningEl) warningEl.classList.add('hidden');
-    }
-  }
+  if (document.getElementById('detail-coordinator')) document.getElementById('detail-coordinator').innerText = eventObj.Coordinator || '-';
+  if (document.getElementById('detail-president')) document.getElementById('detail-president').innerText = eventObj.President || '-';
+  if (document.getElementById('detail-timestamp')) document.getElementById('detail-timestamp').innerText = eventObj.Timestamp ? formatDisplayDate(eventObj.Timestamp) : '-';
 
   const badgeContainer = document.getElementById('detail-categories');
   badgeContainer.innerHTML = '';
-  const categoriesList = eventObj.Categories ? eventObj.Categories.split(',').map(c => c.trim()) : [];
-
-  categoriesList.forEach(cat => {
+  (eventObj.Categories ? eventObj.Categories.split(',').map(c => c.trim()) : []).forEach(cat => {
     const badge = document.createElement('span');
     badge.className = 'detail-tag';
     if (cat === 'ถ่ายภาพ') badge.className += ' tag-photo';
@@ -622,50 +610,7 @@ function openDetailModal(eventObj) {
 
   if (eventObj['Attachment URL']) {
     attachmentSection.classList.remove('hidden');
-
-    const fileUrl = eventObj['Attachment URL'];
-    const fileId = eventObj['Attachment ID'];
-    const urlLower = fileUrl.toLowerCase();
-
-    const isImage = urlLower.includes('drive.google.com/file') ||
-      urlLower.includes('lh3.googleusercontent.com') ||
-      urlLower.startsWith('data:image') ||
-      /\.(jpg|jpeg|png|gif|webp|svg)/.test(urlLower);
-
-    const isAudio = urlLower.startsWith('data:audio') || /\.(mp3|wav|ogg|aac|m4a)/.test(urlLower);
-    const isVideo = urlLower.startsWith('data:video') || /\.(mp4|webm|ogg|mov)/.test(urlLower);
-
-    if (isImage) {
-      let embedUrl = fileId ? 'https://lh3.googleusercontent.com/d/' + fileId + '=w800' : fileUrl;
-      previewContainer.innerHTML =
-        '<img class="preview-image" src="' + embedUrl + '" onerror="this.onerror=null; this.src=\'https://placehold.co/400x200?text=Image\';" alt="ภาพแนบ">' +
-        '<a href="' + fileUrl + '" class="attachment-link-btn" target="_blank">' +
-        '<i class="fa-solid fa-up-right-from-square"></i> เปิดดูรูปภาพเต็ม' +
-        '</a>';
-    } else if (isAudio) {
-      let audioSrc = fileId ? 'https://docs.google.com/uc?export=download&id=' + fileId : fileUrl;
-      previewContainer.innerHTML =
-        '<audio controls class="preview-audio" src="' + audioSrc + '"></audio>' +
-        '<a href="' + fileUrl + '" class="attachment-link-btn" target="_blank">' +
-        '<i class="fa-solid fa-arrow-down"></i> ดาวน์โหลดเสียง' +
-        '</a>';
-    } else if (isVideo) {
-      let videoSrc = fileId ? 'https://docs.google.com/uc?export=download&id=' + fileId : fileUrl;
-      previewContainer.innerHTML =
-        '<video controls class="preview-video" src="' + videoSrc + '"></video>' +
-        '<a href="' + fileUrl + '" class="attachment-link-btn" target="_blank">' +
-        '<i class="fa-solid fa-play"></i> เปิดดูวิดีโอ' +
-        '</a>';
-    } else {
-      previewContainer.innerHTML =
-        '<div class="file-icon-box" style="font-size: 2.5rem;">' +
-        '<i class="fa-solid fa-file-pdf text-primary"></i>' +
-        '</div>' +
-        '<p class="modal-sub">กดเปิดด้านล่างเพื่อดาวน์โหลดเอกสารอ้างอิง</p>' +
-        '<a href="' + fileUrl + '" class="attachment-link-btn" target="_blank">' +
-        '<i class="fa-solid fa-download"></i> ดาวน์โหลดเอกสารประกอบ' +
-        '</a>';
-    }
+    previewContainer.innerHTML = `<a href="${eventObj['Attachment URL']}" class="attachment-link-btn" target="_blank"><i class="fa-solid fa-up-right-from-square"></i> เปิดดูไฟล์แนบ</a>`;
   } else {
     attachmentSection.classList.add('hidden');
   }
@@ -676,48 +621,6 @@ function openDetailModal(eventObj) {
 
 function closeDetailModal() {
   document.getElementById('detail-modal').classList.remove('active');
-  const media = document.getElementById('detail-file-preview').querySelectorAll('audio, video');
-  media.forEach(m => m.pause());
-}
-
-// ==========================================================================
-// Admin Action Flows & API Submissions
-// ==========================================================================
-function triggerDeleteEvent() {
-  if (!selectedEvent) return;
-  if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
-
-  //showLoader(true, 'กำลังลบกิจกรรมผ่าน API...');
-  closeDetailModal();
-
-  const requestBody = {
-    action: 'deleteEvent',
-    eventId: selectedEvent.ID,
-    adminPassword: adminPassword
-  };
-
-  fetch(API_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(requestBody)
-  })
-    .then(res => res.json())
-    .then(result => {
-      showLoader(false);
-      if (result.status === 'success') {
-        showToast('ลบรายการกิจกรรมเรียบร้อยแล้ว', 'success');
-        clearEventsCache(); // 🧹 ล้าง Cache เมื่อลบข้อมูลสำเร็จ
-        loadEventsFromServer();
-      } else {
-        throw new Error(result.message);
-      }
-    })
-    .catch(err => {
-      showLoader(false);
-      showToast('ล้มเหลว: ' + err.message, 'error');
-      if (err.message.includes('รหัสผ่าน')) logoutAdmin();
-    });
 }
 
 function triggerEditEvent() {
@@ -727,98 +630,58 @@ function triggerEditEvent() {
   document.getElementById('form-event-id').value = selectedEvent.ID;
   document.getElementById('form-title-input').value = selectedEvent.Title;
   document.getElementById('form-desc-input').value = selectedEvent.Description || '';
-  document.getElementById('form-coordinator-input').value = selectedEvent.Coordinator || '';
-  document.getElementById('form-president-input').value = selectedEvent.President || '';
+  if (document.getElementById('form-coordinator-input')) document.getElementById('form-coordinator-input').value = selectedEvent.Coordinator || '';
+  if (document.getElementById('form-president-input')) document.getElementById('form-president-input').value = selectedEvent.President || '';
 
-  const startDateObj = parseSheetDate(selectedEvent['Start Date']);
-  const endDateObj = parseSheetDate(selectedEvent['End Date']);
-
-  startPicker.setDate(startDateObj);
-  endPicker.setDate(endDateObj);
+  startPicker.setDate(parseSheetDate(selectedEvent['Start Date']));
+  endPicker.setDate(parseSheetDate(selectedEvent['End Date']));
 
   const categoriesList = selectedEvent.Categories ? selectedEvent.Categories.split(',').map(c => c.trim()) : [];
-  const checkboxes = document.querySelectorAll('.form-category-checkbox');
-  checkboxes.forEach(cb => {
-    cb.checked = categoriesList.includes(cb.value);
-  });
+  document.querySelectorAll('.form-category-checkbox').forEach(cb => { cb.checked = categoriesList.includes(cb.value); });
 
   clearFileSelection();
   deleteExistingAttachment = false;
-
-  const editAttachmentStatus = document.getElementById('edit-attachment-status');
-  if (selectedEvent['Attachment URL']) {
-    editAttachmentStatus.classList.remove('hidden');
-    document.getElementById('edit-attachment-link').href = selectedEvent['Attachment URL'];
-  } else {
-    editAttachmentStatus.classList.add('hidden');
-  }
-
-  document.getElementById('form-title').innerText = 'แก้ไขข้อมูลรายการประสาน (แอดมิน)';
+  document.getElementById('form-title').innerText = 'แก้ไขข้อมูลรายการประสาน';
   document.getElementById('form-modal').classList.add('active');
 }
 
-function markAttachmentForDeletion() {
-  deleteExistingAttachment = true;
-  document.getElementById('edit-attachment-status').classList.add('marked-deleted');
-  showToast('ไฟล์แนบเดิมจะถูกคัดแยกเพื่อลบออกถาวรเมื่อบันทึกรายการ', 'info');
-}
-
-// ==========================================================================
-// Forms Submissions Engine (POST to API)
-// ==========================================================================
 function openAddEventModal() {
   document.getElementById('form-event-id').value = '';
   document.getElementById('form-title-input').value = '';
   document.getElementById('form-desc-input').value = '';
 
   const now = new Date();
-  now.setMinutes(0);
-  now.setSeconds(0);
+  now.setMinutes(0); now.setSeconds(0);
+  const endVal = new Date(now); endVal.setHours(endVal.getHours() + 1);
 
-  const startVal = new Date(now);
-  const endVal = new Date(now);
-  endVal.setHours(endVal.getHours() + 1);
-
-  startPicker.setDate(startVal);
+  startPicker.setDate(now);
   endPicker.setDate(endVal);
 
-  const checkboxes = document.querySelectorAll('.form-category-checkbox');
-  checkboxes.forEach(cb => cb.checked = false);
-
+  document.querySelectorAll('.form-category-checkbox').forEach(cb => cb.checked = false);
   clearFileSelection();
   deleteExistingAttachment = false;
-  document.getElementById('edit-attachment-status').classList.add('hidden');
 
   document.getElementById('form-title').innerText = 'เพิ่มกิจกรรมใหม่ลงปฏิทิน';
   document.getElementById('form-modal').classList.add('active');
 }
 
-function closeFormModal() {
-  document.getElementById('form-modal').classList.remove('active');
-}
+function closeFormModal() { document.getElementById('form-modal').classList.remove('active'); }
 
 function handleFileSelection(event) {
   const file = event.target.files[0];
   if (!file) return;
-
   if (file.size > 10 * 1024 * 1024) {
-    showToast('ไฟล์มีขนาดเกินข้อกำหนดสูงสุด (ไม่เกิน 10MB)', 'error');
+    showToast('ไฟล์มีขนาดเกินข้อกำหนดสูงสุด (10MB)', 'error');
     clearFileSelection();
     return;
   }
-
   const reader = new FileReader();
   reader.onload = function (e) {
-    const dataUrl = e.target.result;
-    const base64Data = dataUrl.split(',')[1];
-
     selectedFile = {
-      bytes: base64Data,
+      bytes: e.target.result.split(',')[1],
       name: file.name,
-      mimeType: file.type,
-      rawUrl: dataUrl
+      mimeType: file.type
     };
-
     document.getElementById('selected-file-name').innerText = file.name;
     document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
     document.getElementById('selected-file-display').classList.remove('hidden');
@@ -829,126 +692,27 @@ function handleFileSelection(event) {
 
 function clearFileSelection() {
   selectedFile = null;
-  document.getElementById('form-file-input').value = '';
-  document.getElementById('selected-file-display').classList.add('hidden');
-  document.querySelector('.dropzone-prompt').classList.remove('hidden');
-}
-
-function handleFormSubmit(e) {
-  e.preventDefault();
-
-  const categoryCbs = document.querySelectorAll('.form-category-checkbox');
-  const checkedCategories = [];
-  categoryCbs.forEach(cb => {
-    if (cb.checked) checkedCategories.push(cb.value);
-  });
-
-  const categoryError = document.getElementById('form-category-error');
-  if (checkedCategories.length === 0) {
-    categoryError.classList.remove('hidden');
-    showToast('กรุณาเลือกประเภทหมวดหมู่บริการอย่างน้อย 1 ประเภท', 'error');
-    return;
-  } else {
-    categoryError.classList.add('hidden');
-  }
-
-  const startDateObj = startPicker.selectedDates[0];
-  const endDateObj = endPicker.selectedDates[0];
-
-  if (!startDateObj || !endDateObj) {
-    showToast('กรุณาระบุวันและเวลาของกิจกรรมงานให้ครบถ้วน', 'error');
-    return;
-  }
-
-  if (endDateObj <= startDateObj) {
-    showToast('วันและเวลาสิ้นสุดกิจกรรมต้องไม่กำหนดก่อนหรือตรงกับช่วงเวลาเริ่มงาน', 'error');
-    return;
-  }
-
-  const eventId = document.getElementById('form-event-id').value;
-  const eventData = {
-    title: document.getElementById('form-title-input').value.trim(),
-    startDate: formatToSheetDate(startDateObj),
-    endDate: formatToSheetDate(endDateObj),
-    categories: checkedCategories.join(', '),
-    description: document.getElementById('form-desc-input').value.trim(),
-    coordinator: document.getElementById('form-coordinator-input') ? document.getElementById('form-coordinator-input').value.trim() : '',
-    president: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : ''
-  };
-
-  closeFormModal();
-  //showLoader(true, eventId ? 'กำลังแก้ไขข้อมูลผ่าน API...' : 'กำลังบันทึกข้อมูลผ่าน API...');
-
-  const requestBody = {
-    action: eventId ? 'updateEvent' : 'addEvent',
-    eventData: eventData,
-    fileData: selectedFile || null
-  };
-
-  if (eventId) {
-    requestBody.adminPassword = adminPassword;
-    requestBody.eventData.id = eventId;
-    requestBody.eventData.deleteExistingAttachment = deleteExistingAttachment;
-  }
-
-  fetch(API_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(requestBody)
-  })
-    .then(res => res.json())
-    .then(result => {
-      showLoader(false);
-      if (result.status === 'success') {
-        showToast(eventId ? 'แก้ไขข้อมูลกิจกรรมสำเร็จ' : 'เพิ่มกิจกรรมใหม่สำเร็จ', 'success');
-        clearEventsCache(); // 🧹 ล้าง Cache เมื่อบันทึก/แก้ไขสำเร็จ
-        loadEventsFromServer();
-      } else {
-        throw new Error(result.message);
-      }
-    })
-    .catch(err => {
-      showLoader(false);
-      showToast('บันทึกล้มเหลว: ' + err.message, 'error');
-      if (err.message.includes('รหัสผ่าน')) logoutAdmin();
-    });
+  if (document.getElementById('form-file-input')) document.getElementById('form-file-input').value = '';
+  if (document.getElementById('selected-file-display')) document.getElementById('selected-file-display').classList.add('hidden');
+  if (document.querySelector('.dropzone-prompt')) document.querySelector('.dropzone-prompt').classList.remove('hidden');
 }
 
 function setupDragAndDrop() {
   const dropzone = document.getElementById('upload-dropzone');
   if (!dropzone) return;
-
-  dropzone.addEventListener('click', function (e) {
-    if (e.target.closest('.btn-clear-selection')) return;
-    document.getElementById('form-file-input').click();
+  dropzone.addEventListener('click', (e) => {
+    if (!e.target.closest('.btn-clear-selection')) document.getElementById('form-file-input').click();
   });
-
-  ['dragenter', 'dragover'].forEach(eventName => {
-    dropzone.addEventListener(eventName, function (e) {
-      e.preventDefault();
-      dropzone.classList.add('dragover');
-    }, false);
-  });
-
-  ['dragleave', 'drop'].forEach(eventName => {
-    dropzone.addEventListener(eventName, function (e) {
-      e.preventDefault();
-      dropzone.classList.remove('dragover');
-    }, false);
-  });
-
-  dropzone.addEventListener('drop', function (e) {
-    const dt = e.dataTransfer;
-    const files = dt.files;
-
-    if (files.length > 0) {
-      const fileInput = document.getElementById('form-file-input');
-      fileInput.files = files;
-      const event = { target: { files: files } };
-      handleFileSelection(event);
+  dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+      document.getElementById('form-file-input').files = e.dataTransfer.files;
+      handleFileSelection({ target: { files: e.dataTransfer.files } });
     }
-  }, false);
+  });
 }
 
 function updateDashboard() {
@@ -956,13 +720,7 @@ function updateDashboard() {
   const currentYear = currentDate.getFullYear();
   const currentMonth = currentDate.getMonth();
 
-  let monthTotal = 0;
-  let todayTotal = 0;
-  let countPhoto = 0;
-  let countVideo = 0;
-  let countAudioFF = 0;
-  let countAudioObj = 0;
-
+  let monthTotal = 0, todayTotal = 0, countPhoto = 0, countVideo = 0, countAudioFF = 0, countAudioObj = 0;
   const upcomingEvents = [];
 
   events.forEach(evt => {
@@ -970,14 +728,9 @@ function updateDashboard() {
     const eDate = parseSheetDate(evt['End Date']);
     if (!sDate || !eDate) return;
 
-    const inCurrentMonth = (sDate.getFullYear() === currentYear && sDate.getMonth() === currentMonth) ||
-      (eDate.getFullYear() === currentYear && eDate.getMonth() === currentMonth) ||
-      (currentDate >= sDate && currentDate <= eDate);
-
-    if (inCurrentMonth) {
+    if ((sDate.getFullYear() === currentYear && sDate.getMonth() === currentMonth) || (eDate.getFullYear() === currentYear && eDate.getMonth() === currentMonth)) {
       monthTotal++;
-      const categoriesList = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
-      categoriesList.forEach(cat => {
+      (evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : []).forEach(cat => {
         if (cat === 'ถ่ายภาพ') countPhoto++;
         else if (cat === 'ถ่ายวิดีโอ') countVideo++;
         else if (cat === 'เครื่องเสียง(ห้องเฟื่องฟ้า)') countAudioFF++;
@@ -986,16 +739,10 @@ function updateDashboard() {
     }
 
     const checkToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startDateClean = new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate());
-    const endDateClean = new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate());
-
-    if (checkToday >= startDateClean && checkToday <= endDateClean) {
+    if (checkToday >= new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate()) && checkToday <= new Date(eDate.getFullYear(), eDate.getMonth(), eDate.getDate())) {
       todayTotal++;
     }
-
-    if (eDate >= now) {
-      upcomingEvents.push(evt);
-    }
+    if (eDate >= now) upcomingEvents.push(evt);
   });
 
   if (document.getElementById('stat-month-total')) document.getElementById('stat-month-total').innerText = monthTotal;
@@ -1005,51 +752,28 @@ function updateDashboard() {
   if (document.getElementById('stat-cat-audio-ff')) document.getElementById('stat-cat-audio-ff').innerText = countAudioFF;
   if (document.getElementById('stat-cat-audio-obj')) document.getElementById('stat-cat-audio-obj').innerText = countAudioObj;
 
-  upcomingEvents.sort((a, b) => {
-    const aDate = parseSheetDate(a['Start Date']) || new Date();
-    const bDate = parseSheetDate(b['Start Date']) || new Date();
-    return aDate - bDate;
-  });
-
+  upcomingEvents.sort((a, b) => (parseSheetDate(a['Start Date']) || 0) - (parseSheetDate(b['Start Date']) || 0));
   const upcomingList = document.getElementById('upcoming-list');
   if (upcomingList) {
     upcomingList.innerHTML = '';
     const topUpcoming = upcomingEvents.slice(0, 4);
-
     if (topUpcoming.length === 0) {
-      upcomingList.innerHTML = '<div class="upcoming-empty">ไม่มีกิจกรรมประสานงานที่กำลังจะมาถึงเร็ว ๆ นี้</div>';
+      upcomingList.innerHTML = '<div class="upcoming-empty">ไม่มีกิจกรรมเร็ว ๆ นี้</div>';
     } else {
       topUpcoming.forEach(evt => {
         const card = document.createElement('div');
         card.className = 'upcoming-card';
-        card.onclick = function () { openDetailModal(evt); };
-
-        card.innerHTML =
-          '<div class="upcoming-info">' +
-          '<span class="upcoming-title">' + evt.Title + '</span>' +
-          '<span class="upcoming-time"><i class="fa-regular fa-clock"></i> ' + formatDisplayDate(evt['Start Date']) + '</span>' +
-          '</div>' +
-          '<i class="fa-solid fa-chevron-right text-muted" style="font-size:0.75rem;"></i>';
-
+        card.onclick = () => openDetailModal(evt);
+        card.innerHTML = `<div class="upcoming-info"><span class="upcoming-title">${evt.Title}</span><span class="upcoming-time"><i class="fa-regular fa-clock"></i> ${formatDisplayDate(evt['Start Date'])}</span></div><i class="fa-solid fa-chevron-right text-muted" style="font-size:0.75rem;"></i>`;
         upcomingList.appendChild(card);
       });
     }
   }
 }
 
-// ==========================================================================
-// Theme Controller
-// ==========================================================================
 function initTheme() {
-  const savedTheme = localStorage.getItem('theme');
-  const isDark = (savedTheme === 'dark');
-
-  if (isDark) {
-    document.body.classList.add('dark-mode');
-  } else {
-    document.body.classList.remove('dark-mode');
-  }
-
+  const isDark = (localStorage.getItem('theme') === 'dark');
+  document.body.classList.toggle('dark-mode', isDark);
   updateThemeButtonUI(isDark);
 }
 
@@ -1061,11 +785,5 @@ function toggleTheme() {
 
 function updateThemeButtonUI(isDark) {
   const btn = document.getElementById('theme-toggle-btn');
-  if (!btn) return;
-
-  if (isDark) {
-    btn.innerHTML = '<i class="fa-solid fa-sun"></i> โหมดสว่าง';
-  } else {
-    btn.innerHTML = '<i class="fa-solid fa-moon"></i> โหมดมืด';
-  }
+  if (btn) btn.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i> โหมดสว่าง' : '<i class="fa-solid fa-moon"></i> โหมดมืด';
 }
