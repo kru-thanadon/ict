@@ -72,7 +72,7 @@ function initApp() {
 function loadEventsFromServer() {
   console.log("🌐 [API] 1. เริ่มกระบวนการดึงข้อมูล...");
 
-  // 1. ดึง Cache จาก LocalStorage ขึ้นมาแสดงผลทันทีก่อน (ถ้ามี)
+  // 1. ดึง Cache มาแสดงผลทันที (ถ้ามี)
   const cachedRaw = localStorage.getItem(CACHE_KEY);
   let hasCache = false;
 
@@ -80,18 +80,38 @@ function loadEventsFromServer() {
     try {
       events = JSON.parse(cachedRaw);
       hasCache = true;
-      console.log(`⚡ [Cache] โหลดข้อมูลจาก Cache สำเร็จ พบ ${events.length} รายการ (แสดงผลทันที)`);
+      console.log(`⚡ [Cache] โหลดข้อมูลจาก Cache สำเร็จ พบ ${events.length} รายการ`);
       filterEvents();
     } catch (e) {
-      console.error("⚠️ [Cache] โหลด Cache ล้มเหลว รูปแบบไม่ถูกต้อง:", e);
+      console.error("⚠️ [Cache] รูปแบบไม่ถูกต้อง:", e);
       localStorage.removeItem(CACHE_KEY);
     }
   }
 
-  // หากไม่มี Cache ให้เปิด Loader หมุนรอ
-  if (!hasCache) {
-    showLoader(true, 'กำลังโหลดตารางงาน...');
-  }
+  // ❌ ลบส่วนสั่ง showLoader(true) ตรงนี้ออกไปเลยครับ ❌
+
+  // 2. ยิง API เบื้องหลังเงียบๆ
+  fetch(`${API_URL}?action=getEvents`)
+    .then(response => response.json())
+    .then(result => {
+      // ❌ ไม่ต้องสั่ง showLoader(false) แล้ว
+      
+      if (result.status === 'success' && Array.isArray(result.data)) {
+        const freshEvents = result.data;
+        const freshRaw = JSON.stringify(freshEvents);
+
+        if (freshRaw !== cachedRaw) {
+          console.log("🔄 [Sync] พบข้อมูลใหม่! อัปเดตตารางเรียบร้อย");
+          localStorage.setItem(CACHE_KEY, freshRaw);
+          events = freshEvents;
+          filterEvents();
+        }
+      }
+    })
+    .catch(err => {
+      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อ:", err);
+    });
+}
 
   // 2. ยิง API เบื้องหลังเพื่อเช็คข้อมูลอัปเดตล่าสุดจาก GAS
   fetch(`${API_URL}?action=getEvents`)
