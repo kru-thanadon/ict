@@ -9,47 +9,48 @@ document.addEventListener('DOMContentLoaded', function () {
   const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';
 
-  // Element Selectors
-  const calendarEl = document.getElementById('calendar');
-  const eventModal = new bootstrap.Modal(document.getElementById('eventModal'));
-  const detailModal = new bootstrap.Modal(document.getElementById('detailModal'));
-  const eventForm = document.getElementById('eventForm');
+  // Custom Modal Element Selectors (ตรงตาม index.html)
+  const detailModalEl = document.getElementById('detail-modal');
+  const formModalEl = document.getElementById('form-modal');
+  const eventForm = document.getElementById('event-form');
+  const fileInput = document.getElementById('form-file-input');
 
   let currentFileBase64 = null;
   let currentFileName = null;
   let currentFileMimeType = null;
 
-  // 1. Initialize FullCalendar
-  const calendar = new FullCalendar.Calendar(calendarEl, {
-    initialView: 'dayGridMonth',
-    locale: 'th',
-    headerToolbar: {
-      left: 'prev,next today',
-      center: 'title',
-      right: 'dayGridMonth,timeGridWeek,listMonth'
-    },
-    selectable: true,
-    editable: false,
-    events: fetchEventsForCalendar,
-    
-    dateClick: function (info) {
-      resetForm();
-      document.getElementById('startDate').value = info.dateStr + 'T08:30';
-      document.getElementById('endDate').value = info.dateStr + 'T16:30';
-      document.getElementById('modalTitle').textContent = 'เพิ่มรายการประสานงาน';
-      eventModal.show();
-    },
+  // 1. Initialize FullCalendar (ถ้าไม่มี #calendar ใน DOM ให้ใช้ Custom Grid)
+  const calendarEl = document.getElementById('calendar');
+  let calendar = null;
 
-    eventClick: function (info) {
-      showEventDetails(info.event);
-    }
-  });
+  if (calendarEl) {
+    calendar = new FullCalendar.Calendar(calendarEl, {
+      initialView: 'dayGridMonth',
+      locale: 'th',
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,timeGridWeek,listMonth'
+      },
+      selectable: true,
+      editable: false,
+      events: fetchEventsForCalendar,
 
-  calendar.render();
+      dateClick: function (info) {
+        openAddEventModal(info.dateStr);
+      },
+
+      eventClick: function (info) {
+        showEventDetails(info.event);
+      }
+    });
+
+    calendar.render();
+  }
 
   // 2. Fetch Events Logic (สลับ Hot Data & Cold Data)
   async function fetchEventsForCalendar(fetchInfo, successCallback, failureCallback) {
-    const viewDate = calendar.getDate();
+    const viewDate = calendar ? calendar.getDate() : new Date();
     const currentDate = new Date();
 
     const isCurrentMonth = (
@@ -78,15 +79,15 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       }));
 
-      successCallback(calendarEvents);
+      if (successCallback) successCallback(calendarEvents);
+      return calendarEvents;
     } catch (error) {
       console.error('Error fetching calendar events:', error);
-      failureCallback(error);
+      if (failureCallback) failureCallback(error);
     }
   }
 
   // 3. File Input Change Handling
-  const fileInput = document.getElementById('fileInput');
   if (fileInput) {
     fileInput.addEventListener('change', function (e) {
       const file = e.target.files[0];
@@ -100,9 +101,7 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         reader.readAsDataURL(file);
       } else {
-        currentFileBase64 = null;
-        currentFileName = null;
-        currentFileMimeType = null;
+        clearFileSelection();
       }
     });
   }
@@ -131,66 +130,87 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // 5. Submit Form Handling
-  eventForm.addEventListener('submit', async function (e) {
-    e.preventDefault();
+  if (eventForm) {
+    eventForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
 
-    const submitBtn = document.getElementById('btnSaveEvent');
-    submitBtn.disabled = true;
-    submitBtn.innerText = 'กำลังบันทึก...';
+      const submitBtn = eventForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> กำลังบันทึก...';
 
-    try {
-      const eventId = document.getElementById('eventId').value;
-      const fileObj = fileInput ? fileInput.files[0] : null;
-      let fileUrl = document.getElementById('existingFileUrl').value || null;
+      try {
+        const eventId = document.getElementById('form-event-id').value;
+        const fileObj = fileInput ? fileInput.files[0] : null;
+        let fileUrl = null;
 
-      if (fileObj) {
-        fileUrl = await uploadToSupabase(fileObj);
+        if (fileObj) {
+          fileUrl = await uploadToSupabase(fileObj);
+        }
+
+        const payload = {
+          id: eventId || null,
+          title: document.getElementById('form-title-input').value,
+          start_date: document.getElementById('form-start-input').value,
+          end_date: document.getElementById('form-end-input').value,
+          categories: getSelectedCategories(),
+          description: document.getElementById('form-desc-input').value,
+          coordinator: document.getElementById('form-coordinator-input').value,
+          president: document.getElementById('form-president-input').value,
+          file_url: fileUrl,
+          file_data: currentFileBase64 ? {
+            bytes: currentFileBase64,
+            name: currentFileName,
+            mimeType: currentFileMimeType
+          } : null
+        };
+
+        const response = await fetch(WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          closeFormModal();
+          resetForm();
+          if (calendar) calendar.refetchEvents();
+        } else {
+          alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล: ' + (result.message || ''));
+        }
+      } catch (err) {
+        console.error('Save error:', err);
+        alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> บันทึกรายการ';
       }
+    });
+  }
 
-      const payload = {
-        id: eventId || null,
-        title: document.getElementById('eventTitle').value,
-        start_date: document.getElementById('startDate').value,
-        end_date: document.getElementById('endDate').value,
-        categories: getSelectedCategories(),
-        description: document.getElementById('eventDescription').value,
-        coordinator: document.getElementById('coordinator').value,
-        president: document.getElementById('president').value,
-        file_url: fileUrl,
-        file_data: currentFileBase64 ? {
-          bytes: currentFileBase64,
-          name: currentFileName,
-          mimeType: currentFileMimeType
-        } : null
-      };
-
-      const response = await fetch(WORKER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        eventModal.hide();
-        resetForm();
-        calendar.refetchEvents();
-      } else {
-        alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล: ' + (result.message || ''));
-      }
-    } catch (err) {
-      console.error('Save error:', err);
-      alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.innerText = 'บันทึกข้อมูล';
+  // 6. Helper & Modal Control Functions (Window Scoped)
+  window.openAddEventModal = function (dateStr = '') {
+    resetForm();
+    if (dateStr) {
+      document.getElementById('form-start-input').value = dateStr + ' 08:30';
+      document.getElementById('form-end-input').value = dateStr + ' 16:30';
     }
-  });
+    document.getElementById('form-title').textContent = 'เพิ่มกิจกรรมงานปฏิทิน';
+    formModalEl.classList.add('active');
+  };
 
-  // 6. Delete Event Handling
-  document.getElementById('btnDeleteEvent').addEventListener('click', async function () {
-    const eventId = document.getElementById('detailEventId').value;
+  window.closeFormModal = function () {
+    formModalEl.classList.remove('active');
+    resetForm();
+  };
+
+  window.closeDetailModal = function () {
+    detailModalEl.classList.remove('active');
+  };
+
+  window.triggerDeleteEvent = async function () {
+    const eventId = document.getElementById('detail-id').textContent;
     if (!eventId) return;
 
     if (confirm('คุณต้องการยกเลิก/ลบรายการนี้ใช่หรือไม่?')) {
@@ -201,8 +221,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const result = await response.json();
 
         if (result.success) {
-          detailModal.hide();
-          calendar.refetchEvents();
+          closeDetailModal();
+          if (calendar) calendar.refetchEvents();
         } else {
           alert('ไม่สามารถลบรายการได้');
         }
@@ -211,68 +231,75 @@ document.addEventListener('DOMContentLoaded', function () {
         alert('เกิดข้อผิดพลาดในการลบรายการ');
       }
     }
-  });
+  };
 
-  // 7. Edit Button Handling
-  document.getElementById('btnEditEvent').addEventListener('click', function () {
-    const eventId = document.getElementById('detailEventId').value;
+  window.triggerEditEvent = function () {
+    const eventId = document.getElementById('detail-id').textContent;
+    if (!calendar || !eventId) return;
+
     const event = calendar.getEventById(eventId);
 
     if (event) {
-      detailModal.hide();
+      closeDetailModal();
 
-      document.getElementById('eventId').value = event.id;
-      document.getElementById('eventTitle').value = event.title;
-      document.getElementById('startDate').value = formatDateTimeLocal(event.start);
-      document.getElementById('endDate').value = formatDateTimeLocal(event.end);
-      document.getElementById('eventDescription').value = event.extendedProps.description || '';
-      document.getElementById('coordinator').value = event.extendedProps.coordinator || '';
-      document.getElementById('president').value = event.extendedProps.president || '';
-      document.getElementById('existingFileUrl').value = event.extendedProps.file_url || '';
+      document.getElementById('form-event-id').value = event.id;
+      document.getElementById('form-title-input').value = event.title;
+      document.getElementById('form-start-input').value = formatDateTimeLocal(event.start);
+      document.getElementById('form-end-input').value = formatDateTimeLocal(event.end);
+      document.getElementById('form-desc-input').value = event.extendedProps.description || '';
+      document.getElementById('form-coordinator-input').value = event.extendedProps.coordinator || '';
+      document.getElementById('form-president-input').value = event.extendedProps.president || '';
 
       setSelectedCategories(event.extendedProps.categories);
-      document.getElementById('modalTitle').textContent = 'แก้ไขรายการประสานงาน';
+      document.getElementById('form-title').textContent = 'แก้ไขกิจกรรมงานปฏิทิน';
 
-      eventModal.show();
+      formModalEl.classList.add('active');
     }
-  });
+  };
 
-  // 8. Helper Functions
   function showEventDetails(event) {
-    document.getElementById('detailEventId').value = event.id;
-    document.getElementById('detailTitle').textContent = event.title;
-    document.getElementById('detailTime').textContent = `${formatThaiDate(event.start)} - ${formatThaiDate(event.end)}`;
-    document.getElementById('detailCategories').textContent = event.extendedProps.categories || '-';
-    document.getElementById('detailDescription').textContent = event.extendedProps.description || '-';
-    document.getElementById('detailPresident').textContent = event.extendedProps.president || '-';
-    document.getElementById('detailCoordinator').textContent = event.extendedProps.coordinator || '-';
+    document.getElementById('detail-id').textContent = event.id;
+    document.getElementById('detail-title').textContent = event.title;
+    document.getElementById('detail-start').textContent = formatThaiDate(event.start);
+    document.getElementById('detail-end').textContent = formatThaiDate(event.end);
+    document.getElementById('detail-categories').textContent = event.extendedProps.categories || '-';
+    document.getElementById('detail-desc').textContent = event.extendedProps.description || '-';
+    document.getElementById('detail-president').textContent = event.extendedProps.president || '-';
+    document.getElementById('detail-coordinator').textContent = event.extendedProps.coordinator || '-';
 
-    const fileContainer = document.getElementById('detailFileContainer');
+    const filePreview = document.getElementById('detail-file-preview');
     if (event.extendedProps.file_url) {
-      fileContainer.innerHTML = `<a href="${event.extendedProps.file_url}" target="_blank" class="btn btn-sm btn-outline-primary">📎 เปิดแนบไฟล์เอกสาร</a>`;
+      filePreview.innerHTML = `<a href="${event.extendedProps.file_url}" target="_blank" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-paperclip"></i> เปิดดูไฟล์แนบเอกสาร</a>`;
     } else {
-      fileContainer.innerHTML = '<span class="text-muted">ไม่มีไฟล์แนบ</span>';
+      filePreview.innerHTML = '<span class="text-muted">ไม่มีไฟล์แนบ</span>';
     }
 
-    detailModal.show();
+    detailModalEl.classList.add('active');
   }
 
   function resetForm() {
-    eventForm.reset();
-    document.getElementById('eventId').value = '';
-    document.getElementById('existingFileUrl').value = '';
+    if (eventForm) eventForm.reset();
+    document.getElementById('form-event-id').value = '';
+    clearFileSelection();
+  }
+
+  window.clearFileSelection = function () {
+    if (fileInput) fileInput.value = '';
     currentFileBase64 = null;
     currentFileName = null;
     currentFileMimeType = null;
-  }
+
+    const selectedDisplay = document.getElementById('selected-file-display');
+    if (selectedDisplay) selectedDisplay.classList.add('hidden');
+  };
 
   function getSelectedCategories() {
-    const checkboxes = document.querySelectorAll('input[name="category"]:checked');
+    const checkboxes = document.querySelectorAll('input[name="form-categories"]:checked');
     return Array.from(checkboxes).map(cb => cb.value).join(', ');
   }
 
   function setSelectedCategories(categoriesStr) {
-    const checkboxes = document.querySelectorAll('input[name="category"]');
+    const checkboxes = document.querySelectorAll('input[name="form-categories"]');
     const selectedList = categoriesStr ? categoriesStr.split(',').map(s => s.trim()) : [];
     checkboxes.forEach(cb => {
       cb.checked = selectedList.includes(cb.value);
@@ -283,7 +310,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!dateObj) return '';
     const d = new Date(dateObj);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 16);
+    return d.toISOString().slice(0, 16).replace('T', ' ');
   }
 
   function formatThaiDate(dateObj) {
