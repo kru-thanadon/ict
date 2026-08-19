@@ -101,13 +101,12 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 (Hot) & GAS (Cold/KV Cache)
+ * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 (Hot Data เดือนปัจจุบัน/งานปัจจุบัน)
  */
 function syncWithServer() {
   const syncStartTime = performance.now();
   console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching Hot Events from D1...`);
 
-  // 1. ดึง Hot Data หลักจาก D1
   fetch(`${WORKER_API_URL}`)
     .then(res => {
       if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
@@ -128,30 +127,39 @@ function syncWithServer() {
           Coordinator: item.coordinator || '',
           President: item.president || '',
           'Attachment URL': item.file_url || '',
-          Timestamp: item.created_at || ''
+          Timestamp: item.created_at || '',
+          isColdData: false // ระบุว่าเป็นข้อมูลสดจาก D1
         }));
 
-        mergeEventsToCache(mappedEvents);
+        // รวมข้อมูล และ Purge รายการที่ลบใน D1 ออกจาก Cache
+        syncD1ToCache(mappedEvents);
       }
 
-      // 2. แอบสั่งดึง Cold Data ของเดือนก่อน/หลัง ล่วงหน้าเบื้องหลัง
+      // ❄️ ดึงข้อมูล Cold Data (GAS) เฉพาะ "เดือนในอดีต" เท่านั้น (ไม่แตะเดือนปัจจุบัน)
       fetchColdMonthsData(currentDate.getFullYear(), currentDate.getMonth() + 1);
     })
     .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Error fetching from D1:`, err));
 }
 
 /**
- * ❄️ ฟังก์ชันดึงข้อมูล Cold Data (เดือนเก่า/ล่วงหน้า) จาก Worker KV -> GAS
+ * ❄️ ฟังก์ชันดึงข้อมูล Cold Data (GAS) เฉพาะเดือนในอดีต
  */
 function fetchColdMonthsData(year, month) {
-  // สร้างรายการเดือนที่ต้องการ Prefetch: [เดือนก่อนหน้า, เดือนถัดไป 1, เดือนถัดไป 2]
-  const monthsToFetch = [
-    getOffsetYearMonth(year, month, -1),
-    getOffsetYearMonth(year, month, 1),
-    getOffsetYearMonth(year, month, 2)
-  ];
+  const now = new Date();
+  const currentY = now.getFullYear();
+  const currentM = now.getMonth() + 1;
 
-  monthsToFetch.forEach(({ y, m }) => {
+  // 🎯 ดึงเฉพาะเดือนย้อนหลัง เช่น -1, -2, -3 (ตัด 0 และเดือนล่วงหน้าที่อยู่ใน D1 ออก)
+  const pastOffsets = [-1, -2, -3];
+
+  pastOffsets.forEach(offset => {
+    const { y, m } = getOffsetYearMonth(year, month, offset);
+
+    // 🛑 Guard Check: ถ้าเป็นเดือนปัจจุบัน หรือ อนาคต ข้ามทันที ไม่ต้องยิงหา GAS
+    if (y > currentY || (y === currentY && m >= currentM)) {
+      return;
+    }
+
     fetch(`${WORKER_API_URL}?source=cold&year=${y}&month=${m}`)
       .then(res => res.json())
       .then(coldEvents => {
@@ -166,36 +174,52 @@ function fetchColdMonthsData(year, month) {
             Coordinator: item.coordinator || item.Coordinator || '',
             President: item.president || item.President || '',
             'Attachment URL': item.file_url || item.fileUrl || item['Attachment URL'] || '',
-            Timestamp: item.timestamp || item.Timestamp || ''
+            Timestamp: item.timestamp || item.Timestamp || '',
+            isColdData: true // Mark ไว้ว่าเป็นข้อมูลอดีตจาก GAS
           }));
 
-          mergeEventsToCache(mappedColdEvents);
+          mergeColdToCache(mappedColdEvents);
         }
       })
       .catch(err => console.warn(`[Cold Fetch Warning] Failed for ${y}-${m}:`, err));
   });
 }
 
-function getOffsetYearMonth(year, month, offset) {
-  const d = new Date(year, month - 1 + offset, 1);
-  return { y: d.getFullYear(), m: d.getMonth() + 1 };
+/**
+ * 🔄 ซิงค์ข้อมูลจาก D1 เข้า Cache
+ * (ลบรายการที่ไม่มีใน D1 ออกจาก Cache สำหรับงานช่วงปัจจุบัน)
+ */
+function syncD1ToCache(d1Events) {
+  const d1Ids = new Set(d1Events.map(e => String(e.ID)));
+  
+  // เก็บเฉพาะ Cold Data เดิมจากอดีต + เอาข้อมูล D1 ล่าสุดไปแทนที่ทั้งหมด
+  const preservedColdEvents = events.filter(e => {
+    // ถ้าเป็นข้อมูลเก่าในอดีต (ที่ไม่อยู่ในขอบเขต D1) ให้เก็บไว้
+    if (e.isColdData) return true; 
+    // ถ้าเป็นข้อมูลช่วง D1 แต่ไม่มีใน d1Events แล้ว ให้ลบทิ้ง (แสดงว่าโดน delete ไปแล้ว)
+    return false; 
+  });
+
+  const merged = [...preservedColdEvents, ...d1Events];
+  updateCacheAndRender(merged);
 }
 
 /**
- * 🔄 รวมข้อมูลใหม่เข้ากับ Events เดิมโดยไม่ให้รายการซ้ำกัน
+ * ❄️ รวม Cold Data (อดีต) เข้า Cache โดยไม่กระทบ D1 Data
  */
-function mergeEventsToCache(newItems) {
+function mergeColdToCache(coldEvents) {
   const eventMap = new Map();
-  // ใส่ของเดิมก่อน
   events.forEach(item => { if (item.ID) eventMap.set(String(item.ID), item); });
-  // ใส่ของใหม่ทับ/เพิ่ม
-  newItems.forEach(item => { if (item.ID) eventMap.set(String(item.ID), item); });
+  
+  coldEvents.forEach(item => {
+    // ถ้ายังไม่มีใน Map ค่อยเพิ่มเข้าไป
+    if (item.ID && !eventMap.has(String(item.ID))) {
+      eventMap.set(String(item.ID), item);
+    }
+  });
 
   const merged = Array.from(eventMap.values());
-  if (JSON.stringify(merged) !== JSON.stringify(events)) {
-    console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Merge Events] Updated event store (${merged.length} items).`);
-    updateCacheAndRender(merged);
-  }
+  updateCacheAndRender(merged);
 }
 
 /**
