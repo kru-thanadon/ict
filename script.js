@@ -680,7 +680,7 @@ function triggerDeleteEvent() {
   if (!selectedEvent) return;
   if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
 
-  showLoader(true, 'กำลังลบกิจกรรมผ่าน API...');
+  //showLoader(true, 'กำลังลบกิจกรรมผ่าน API...');
   closeDetailModal();
 
   const requestBody = {
@@ -870,7 +870,7 @@ function handleFormSubmit(e) {
   };
 
   closeFormModal();
-  showLoader(true, eventId ? 'กำลังแก้ไขข้อมูลผ่าน API...' : 'กำลังบันทึกข้อมูลผ่าน API...');
+  //showLoader(true, eventId ? 'กำลังแก้ไขข้อมูลผ่าน API...' : 'กำลังบันทึกข้อมูลผ่าน API...');
 
   const requestBody = {
     action: eventId ? 'updateEvent' : 'addEvent',
