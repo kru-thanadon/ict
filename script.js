@@ -4,20 +4,20 @@
 // ==========================================================================
 
 document.addEventListener('DOMContentLoaded', function () {
-  // 🟢 Config Endpoints
-  const WORKER_URL = 'https://ict.deaseler.workers.dev'; // URL ของ Cloudflare Worker[cite: 3]
-  const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';[cite: 3]
-  const SUPABASE_ANON_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';[cite: 3]
+  // 🟢 Config Endpoints (ตรวจสอบให้แน่ใจว่าปิดคำสั่งด้วย ; และไม่มี : เกิน)
+  const WORKER_URL = 'https://ict.deaseler.workers.dev';
+  const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';
 
   // Element Selectors
-  const calendarEl = document.getElementById('calendar');[cite: 3]
-  const eventModal = new bootstrap.Modal(document.getElementById('eventModal'));[cite: 3]
-  const detailModal = new bootstrap.Modal(document.getElementById('detailModal'));[cite: 3]
-  const eventForm = document.getElementById('eventForm');[cite: 3]
+  const calendarEl = document.getElementById('calendar');
+  const eventModal = new bootstrap.Modal(document.getElementById('eventModal'));
+  const detailModal = new bootstrap.Modal(document.getElementById('detailModal'));
+  const eventForm = document.getElementById('eventForm');
 
-  let currentFileBase64 = null;[cite: 3]
-  let currentFileName = null;[cite: 3]
-  let currentFileMimeType = null;[cite: 3]
+  let currentFileBase64 = null;
+  let currentFileName = null;
+  let currentFileMimeType = null;
 
   // 1. Initialize FullCalendar
   const calendar = new FullCalendar.Calendar(calendarEl, {[cite: 3]
