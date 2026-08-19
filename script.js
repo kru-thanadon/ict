@@ -67,10 +67,11 @@ function initApp() {
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรม (อ่าน Cache ทันที + Sync อัปเดตทับเบื้องหลังเงียบๆ)
+ * 🌐 GET API: โหลดข้อมูลกิจกรรม (Silent Sync + Detailed Logging & Execution Time)
  */
 function loadEventsFromServer() {
-  console.log("🌐 [API] เริ่มกระบวนการดึงข้อมูล...");
+  const startTime = performance.now(); // ⏱️ เริ่มจับเวลา
+  console.log("🚀 [System Sync] เริ่มกระบวนการโหลดและประสานข้อมูลระบบ...");
 
   // 1. อ่าน Cache ในเครื่องมาแสดงบนหน้าจอทันที (ถ้ามี)
   const cachedRaw = localStorage.getItem(CACHE_KEY);
@@ -78,44 +79,56 @@ function loadEventsFromServer() {
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
-      console.log(`⚡ [Cache] โหลดตารางจาก Cache ขึ้นจอทันที ${events.length} รายการ`);
+      const cacheTime = (performance.now() - startTime).toFixed(2);
+      console.log(`⚡ [Cache Loaded] แสดงผลจาก Local Cache สำเร็จ (${events.length} รายการ) | ใช้เวลา: ${cacheTime} ms`);
       
-      // วาดตารางขึ้นจอทันที และปิด Loader บังหน้าจอออกทันที!
+      // วาดตารางทันที และปิด Loader บังหน้าจอออกทันที
       filterEvents();
       showLoader(false); 
     } catch (e) {
-      console.error("⚠️ [Cache] รูปแบบ Cache เสียหาย:", e);
+      console.error("⚠️ [Cache Error] รูปแบบ Cache เสียหาย ไม่สามารถใช้งานได้:", e);
     }
+  } else {
+    console.log("ℹ️ [Cache Info] ไม่พบข้อมูลใน Local Cache (ระบบจะรอรับข้อมูลจาก API)...");
   }
 
-  // 2. แอบยิงไปดึงข้อมูลสดจาก GAS เบื้องหลังเงียบๆ (ไม่เปิด Loader)
+  // 2. แอบยิงไปดึงข้อมูลสดจาก GAS เบื้องหลังเงียบๆ
+  console.log("📡 [Background Sync] กำลังส่ง Request ไปยัง Google Apps Script API...");
+  const apiStartTime = performance.now(); // ⏱️ จับเวลาเฉพาะฝั่ง API
+
   fetch(`${API_URL}?action=getEvents`)
     .then(response => response.json())
     .then(result => {
-      // เผื่อกรณีเข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache เลย
-      showLoader(false);
+      const apiDuration = (performance.now() - apiStartTime).toFixed(2);
+      showLoader(false); // เผื่อกรณีเข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache
 
       if (result.status === 'success' && Array.isArray(result.data)) {
+        console.log(`📥 [API Response] ได้รับข้อมูลสดจาก GAS สำเร็จ | เวลาตอบกลับ API: ${apiDuration} ms`);
+        
         const freshEvents = result.data;
         const freshRaw = JSON.stringify(freshEvents);
 
-        // 3. เช็คว่าข้อมูลสดต่างจาก Cache บนหน้าจอหรือไม่?
+        // 3. เช็คว่าข้อมูลสดต่างจาก Cache บนหน้าจอหรือไม่
         if (freshRaw !== cachedRaw) {
-          console.log("🔄 [Background Sync] พบข้อมูลใหม่! อัปเดต Cache และวาดตารางใหม่เรียบร้อย");
+          console.log("🔄 [Data Changed] พบการเปลี่ยนแปลงของข้อมูล! กำลังบันทึก Cache และวาดตารางใหม่...");
           
-          // บันทึกทับ Cache เดิมทันที
           localStorage.setItem(CACHE_KEY, freshRaw);
           events = freshEvents;
-          
-          // วาดตารางใหม่ให้เป็นปัจจุบัน
           filterEvents();
+
+          const totalTime = (performance.now() - startTime).toFixed(2);
+          console.log(`✅ [Sync Completed] อัปเดตตารางหน้าเว็บเรียบร้อยแล้ว! | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
         } else {
-          console.log("✅ [Background Sync] ข้อมูลเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ใหม่");
+          const totalTime = (performance.now() - startTime).toFixed(2);
+          console.log(`✅ [Sync Completed] ข้อมูลบนหน้าเว็บเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ซ้ำ | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
         }
+      } else {
+        throw new Error(result.message || 'โครงสร้างข้อมูลตอบกลับไม่ถูกต้อง');
       }
     })
     .catch(err => {
-      console.error("🚨 [Background Sync] ดึงข้อมูลเบื้องหลังไม่สำเร็จ:", err);
+      const apiDuration = (performance.now() - apiStartTime).toFixed(2);
+      console.error(`🚨 [Sync Failed] การดึงข้อมูลเบื้องหลังล้มเหลว (${apiDuration} ms):`, err);
       showLoader(false);
     });
 }
