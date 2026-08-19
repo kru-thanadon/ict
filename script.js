@@ -109,7 +109,7 @@ function syncWithServer() {
   const syncStartTime = performance.now();
   console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching events from Cloudflare D1...`);
 
-  fetch(`${WORKER_API_URL}/api/events`)
+  fetch(`${WORKER_API_URL}`)
     .then(res => {
       if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
       return res.json();
@@ -268,7 +268,7 @@ async function handleFormSubmit(e) {
     file_url: uploadedFileUrl
   };
 
-  fetch(`${WORKER_API_URL}/api/events`, {
+  fetch(`${WORKER_API_URL}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -303,7 +303,7 @@ function triggerDeleteEvent() {
   showToast('ลบรายการเรียบร้อยแล้ว', 'success');
 
   // 2. 📡 ยิงลบข้อมูลที่ Cloudflare Worker API
-  fetch(`${WORKER_API_URL}/api/events?id=${targetId}`, {
+  fetch(`${WORKER_API_URL}?id=${targetId}`, {
     method: 'DELETE'
   })
     .then(res => res.json())
