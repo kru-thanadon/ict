@@ -142,21 +142,24 @@ function syncWithServer() {
 }
 
 /**
- * ❄️ ฟังก์ชันดึงข้อมูล Cold Data (GAS) เฉพาะเดือนในอดีต
+ * ❄️ ฟังก์ชันดึงข้อมูล Cold Data (GAS) เฉพาะเดือนในอดีตเท่านั้น
  */
 function fetchColdMonthsData(year, month) {
-  const now = new Date();
-  const currentY = now.getFullYear();
-  const currentM = now.getMonth() + 1;
+  const realNow = new Date();
+  const currentY = realNow.getFullYear();
+  const currentM = realNow.getMonth() + 1; // เดือนปัจจุบันจริง ณ วันนี้
 
-  // 🎯 ดึงเฉพาะเดือนย้อนหลัง เช่น -1, -2, -3 (ตัด 0 และเดือนล่วงหน้าที่อยู่ใน D1 ออก)
   const pastOffsets = [-1, -2, -3];
 
   pastOffsets.forEach(offset => {
-    const { y, m } = getOffsetYearMonth(year, month, offset);
+    // คำนวณปีและเดือนตาม offset
+    const targetDate = new Date(year, (month - 1) + offset, 1);
+    const y = targetDate.getFullYear();
+    const m = targetDate.getMonth() + 1;
 
-    // 🛑 Guard Check: ถ้าเป็นเดือนปัจจุบัน หรือ อนาคต ข้ามทันที ไม่ต้องยิงหา GAS
+    // 🛑 GUARD CHECK: ถ้าเดือนที่จะดึง >= เดือนปัจจุบันจริง ห้ามยิงหา GAS/Sheets เด็ดขาด!
     if (y > currentY || (y === currentY && m >= currentM)) {
+      console.log(`[Cold Fetch Blocked] Skip fetching cold data for current/future month: ${y}-${m}`);
       return;
     }
 
@@ -190,16 +193,24 @@ function fetchColdMonthsData(year, month) {
  * (ลบรายการที่ไม่มีใน D1 ออกจาก Cache สำหรับงานช่วงปัจจุบัน)
  */
 function syncD1ToCache(d1Events) {
-  const d1Ids = new Set(d1Events.map(e => String(e.ID)));
-  
-  // เก็บเฉพาะ Cold Data เดิมจากอดีต + เอาข้อมูล D1 ล่าสุดไปแทนที่ทั้งหมด
+  const realNow = new Date();
+  const currentY = realNow.getFullYear();
+  const currentM = realNow.getMonth(); // 0-11
+
+  // คัดเอาเฉพาะ Cold Data ในอดีต (เดือนก่อนหน้าเดือนปัจจุบันจริง) เก็บไว้
   const preservedColdEvents = events.filter(e => {
-    // ถ้าเป็นข้อมูลเก่าในอดีต (ที่ไม่อยู่ในขอบเขต D1) ให้เก็บไว้
-    if (e.isColdData) return true; 
-    // ถ้าเป็นข้อมูลช่วง D1 แต่ไม่มีใน d1Events แล้ว ให้ลบทิ้ง (แสดงว่าโดน delete ไปแล้ว)
-    return false; 
+    if (!e.isColdData) return false; // ลบทิ้งทั้งหมดถ้าไม่ใช่ Cold Data เพื่อเอา D1 มาแทนที่
+
+    const startDate = parseSheetDate(e['Start Date']);
+    if (!startDate) return false;
+
+    // ถ้าเป็นข้อมูลของเดือนก่อนหน้าเดือนปัจจุบันจริง ให้เก็บไว้
+    const isPastMonth = startDate.getFullYear() < currentY || 
+                       (startDate.getFullYear() === currentY && startDate.getMonth() < currentM);
+    return isPastMonth;
   });
 
+  // รวมข้อมูลอดีต + ข้อมูลสดล่าสุดจาก D1 (รายการที่ลบใน D1 จะหายไปทันที)
   const merged = [...preservedColdEvents, ...d1Events];
   updateCacheAndRender(merged);
 }
@@ -313,7 +324,8 @@ async function handleFormSubmit(e) {
     Coordinator: document.getElementById('form-coordinator-input') ? document.getElementById('form-coordinator-input').value.trim() : '',
     President: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : '',
     'Attachment URL': uploadedFileUrl,
-    Timestamp: formatToSheetDate(new Date())
+    Timestamp: formatToSheetDate(new Date()),
+    isColdData: false
   };
 
   closeFormModal();
