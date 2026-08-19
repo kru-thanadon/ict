@@ -74,28 +74,29 @@ function loadEventsFromServer() {
 
   // 1. ดึง Cache มาแสดงผลทันที (ถ้ามี)
   const cachedRaw = localStorage.getItem(CACHE_KEY);
-  let hasCache = false;
 
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
-      hasCache = true;
-      console.log(`⚡ [Cache] โหลดข้อมูลจาก Cache สำเร็จ พบ ${events.length} รายการ`);
+      console.log(`⚡ [Cache] โหลดสำเร็จ ${events.length} รายการ`);
+      
       filterEvents();
+      
+      // 🌟 สั่งปิดหน้าหมุนทันทีตรงนี้เลย!
+      showLoader(false); 
     } catch (e) {
       console.error("⚠️ [Cache] รูปแบบไม่ถูกต้อง:", e);
       localStorage.removeItem(CACHE_KEY);
     }
   }
 
-  // ❌ ลบส่วนสั่ง showLoader(true) ตรงนี้ออกไปเลยครับ ❌
-
-  // 2. ยิง API เบื้องหลังเงียบๆ
+  // 2. แอบยิงไปเช็คข้อมูลล่าสุดจาก GAS เบื้องหลังเงียบๆ
   fetch(`${API_URL}?action=getEvents`)
     .then(response => response.json())
     .then(result => {
-      // ❌ ไม่ต้องสั่ง showLoader(false) แล้ว
-      
+      // เผื่อกรณีเปิดครั้งแรกสุดที่ยังไม่มี Cache ให้ปิด Loader เมื่อได้ข้อมูล
+      showLoader(false);
+
       if (result.status === 'success' && Array.isArray(result.data)) {
         const freshEvents = result.data;
         const freshRaw = JSON.stringify(freshEvents);
@@ -110,6 +111,7 @@ function loadEventsFromServer() {
     })
     .catch(err => {
       console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อ:", err);
+      showLoader(false);
     });
 }
 
