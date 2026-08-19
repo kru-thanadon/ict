@@ -264,8 +264,9 @@ async function handleFormSubmit(e) {
     file_url: uploadedFileUrl || ''
   };
 
+  // ส่ง id ไปเป็น String (ห้ามใช้ Number(eventId))
   if (eventId && !String(eventId).startsWith('TEMP-')) {
-    payload.id = Number(eventId);
+    payload.id = eventId; 
   }
 
   fetch(`${WORKER_API_URL}`, {
