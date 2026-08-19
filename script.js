@@ -250,17 +250,23 @@ async function handleFormSubmit(e) {
   updateCacheAndRender(updatedEvents);
   showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
 
+  // 🛠️ แก้ไข Payload เพื่อป้องกัน SQLITE_MISMATCH:
+  // ไม่ส่ง id string ในกรณีสร้างใหม่ (ให้ SQLite Auto Increment เอง) 
+  // และส่งเป็น Number เสมอหากเป็นการแก้ไข
   const payload = {
-    id: eventId || undefined,
     title: eventData.Title,
     start_date: eventData['Start Date'],
     end_date: eventData['End Date'],
     categories: eventData.Categories,
-    description: eventData.Description,
-    coordinator: eventData.Coordinator,
-    president: eventData.President,
-    file_url: uploadedFileUrl
+    description: eventData.Description || '',
+    coordinator: eventData.Coordinator || '',
+    president: eventData.President || '',
+    file_url: uploadedFileUrl || ''
   };
+
+  if (eventId && !String(eventId).startsWith('TEMP-')) {
+    payload.id = Number(eventId);
+  }
 
   fetch(`${WORKER_API_URL}`, {
     method: 'POST',
