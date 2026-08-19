@@ -67,64 +67,64 @@ function initApp() {
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรม (No-Loader Background Sync)
+ * 🌐 GET API: โหลดข้อมูลกิจกรรม (อ่าน Cache ทันที + Sync อัปเดตทับเบื้องหลังเงียบๆ)
  */
 function loadEventsFromServer() {
-  console.log("🌐 [API] 1. เริ่มกระบวนการดึงข้อมูล...");
+  console.log("🌐 [API] เริ่มกระบวนการดึงข้อมูล...");
 
-  // 1. ดึง Cache จาก LocalStorage ขึ้นมาแสดงผลทันที (ถ้ามี)
+  // 1. อ่าน Cache ในเครื่องมาแสดงบนหน้าจอทันที (ถ้ามี)
   const cachedRaw = localStorage.getItem(CACHE_KEY);
 
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
-      console.log(`⚡ [Cache] แสดงผลจาก Cache ทันที ${events.length} รายการ`);
+      console.log(`⚡ [Cache] โหลดตารางจาก Cache ขึ้นจอทันที ${events.length} รายการ`);
       
-      // วาดตารางทันที + ปิด Loader ทันที (ถ้ามีค้างอยู่)
+      // วาดตารางขึ้นจอทันที และปิด Loader บังหน้าจอออกทันที!
       filterEvents();
       showLoader(false); 
     } catch (e) {
-      console.error("⚠️ [Cache] รูปแบบไม่ถูกต้อง:", e);
-      localStorage.removeItem(CACHE_KEY);
+      console.error("⚠️ [Cache] รูปแบบ Cache เสียหาย:", e);
     }
   }
 
-  // 2. ยิง API เบื้องหลังเพื่อเช็คข้อมูลอัปเดตล่าสุดจาก GAS
+  // 2. แอบยิงไปดึงข้อมูลสดจาก GAS เบื้องหลังเงียบๆ (ไม่เปิด Loader)
   fetch(`${API_URL}?action=getEvents`)
     .then(response => response.json())
     .then(result => {
-      // เมื่อได้ข้อมูลสด ปิด Loader (เผื่อกรณีเข้าเว็บครั้งแรกแล้วยังไม่มี Cache)
+      // เผื่อกรณีเข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache เลย
       showLoader(false);
 
       if (result.status === 'success' && Array.isArray(result.data)) {
         const freshEvents = result.data;
         const freshRaw = JSON.stringify(freshEvents);
 
-        // 3. ถ้าข้อมูลใหม่ ไม่ตรงกับ Cache เดิมค่อยอัปเดตหน้าจอ
+        // 3. เช็คว่าข้อมูลสดต่างจาก Cache บนหน้าจอหรือไม่?
         if (freshRaw !== cachedRaw) {
-          console.log("🔄 [Sync] พบข้อมูลอัปเดตใหม่! กำลังวาดตารางใหม่...");
+          console.log("🔄 [Background Sync] พบข้อมูลใหม่! อัปเดต Cache และวาดตารางใหม่เรียบร้อย");
+          
+          // บันทึกทับ Cache เดิมทันที
           localStorage.setItem(CACHE_KEY, freshRaw);
           events = freshEvents;
-          filterEvents(); // อัปเดตตารางให้เป็นปัจจุบันทันที
+          
+          // วาดตารางใหม่ให้เป็นปัจจุบัน
+          filterEvents();
         } else {
-          console.log("✅ [Sync] ข้อมูลตรงกับ Cache แล้ว ไม่ต้องเรนเดอร์ซ้ำ");
+          console.log("✅ [Background Sync] ข้อมูลเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ใหม่");
         }
-      } else {
-        throw new Error(result.message || 'โครงสร้างข้อมูลไม่ถูกต้อง');
       }
     })
     .catch(err => {
-      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อเบื้องหลัง:", err);
+      console.error("🚨 [Background Sync] ดึงข้อมูลเบื้องหลังไม่สำเร็จ:", err);
       showLoader(false);
     });
 }
 
 /**
- * 🧹 ล้าง Cache เมื่อมีการแก้ไข/ลบ/เพิ่มข้อมูลสำเร็จ
+ * 🧹 ฟังก์ชันนี้ไม่จำเป็นต้องถูกเรียกใช้แล้ว (ยกเลิกการล้าง Cache)
  */
 function clearEventsCache() {
-  localStorage.removeItem(CACHE_KEY);
-  console.log("🧹 [Cache] ล้าง Cache ทิ้งเรียบร้อยแล้ว");
+  // ปล่อยว่างไว้เพื่อไม่ให้โค้ดส่วนอื่นที่เผลอเรียกใช้งานเกิด Error
 }
 
 function showLoader(show, text) {
