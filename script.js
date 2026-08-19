@@ -119,12 +119,12 @@ function syncWithServer() {
       console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [Sync Duration] D1 responded in ${(syncEndTime - syncStartTime).toFixed(2)} ms`);
 
       if (Array.isArray(dbEvents)) {
-        // แปลง Key จาก Database Schema ให้เข้ากับระบบ UI
+        // แปลง Key และ Format ข้อมูลจาก D1 Schema ให้ตรงกับระบบ UI
         const mappedEvents = dbEvents.map(item => ({
-          ID: String(item.id),
-          Title: item.title,
-          'Start Date': item.start_date,
-          'End Date': item.end_date,
+          ID: item.id, // คงประเภทข้อมูล ID ตามเดิม
+          Title: item.title || '',
+          'Start Date': item.start_date || '',
+          'End Date': item.end_date || '',
           Categories: item.categories || '',
           Description: item.description || '',
           Coordinator: item.coordinator || '',
