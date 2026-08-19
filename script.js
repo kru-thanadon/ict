@@ -67,22 +67,21 @@ function initApp() {
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรมทั้งหมดด้วยระบบ Smart Cache & Background Sync
+ * 🌐 GET API: โหลดข้อมูลกิจกรรม (No-Loader Background Sync)
  */
 function loadEventsFromServer() {
   console.log("🌐 [API] 1. เริ่มกระบวนการดึงข้อมูล...");
 
-  // 1. ดึง Cache มาแสดงผลทันที (ถ้ามี)
+  // 1. ดึง Cache จาก LocalStorage ขึ้นมาแสดงผลทันที (ถ้ามี)
   const cachedRaw = localStorage.getItem(CACHE_KEY);
 
   if (cachedRaw) {
     try {
       events = JSON.parse(cachedRaw);
-      console.log(`⚡ [Cache] โหลดสำเร็จ ${events.length} รายการ`);
+      console.log(`⚡ [Cache] แสดงผลจาก Cache ทันที ${events.length} รายการ`);
       
+      // วาดตารางทันที + ปิด Loader ทันที (ถ้ามีค้างอยู่)
       filterEvents();
-      
-      // 🌟 สั่งปิดหน้าหมุนทันทีตรงนี้เลย!
       showLoader(false); 
     } catch (e) {
       console.error("⚠️ [Cache] รูปแบบไม่ถูกต้อง:", e);
@@ -90,27 +89,30 @@ function loadEventsFromServer() {
     }
   }
 
-  // 2. แอบยิงไปเช็คข้อมูลล่าสุดจาก GAS เบื้องหลังเงียบๆ
+  // 2. แอบยิงไปเช็คข้อมูลล่าสุดจาก GAS เบื้องหลังเงียบๆ (ไม่เปิด Loader บังหน้าจอ)
   fetch(`${API_URL}?action=getEvents`)
     .then(response => response.json())
     .then(result => {
-      // เผื่อกรณีเปิดครั้งแรกสุดที่ยังไม่มี Cache ให้ปิด Loader เมื่อได้ข้อมูล
+      // เมื่อได้ข้อมูลสด ปิด Loader เผื่อกรณีที่เข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache
       showLoader(false);
 
       if (result.status === 'success' && Array.isArray(result.data)) {
         const freshEvents = result.data;
         const freshRaw = JSON.stringify(freshEvents);
 
+        // 3. ถ้าข้อมูลใหม่ ไม่ตรงกับ Cache เดิมค่อยอัปเดตหน้าจอ
         if (freshRaw !== cachedRaw) {
-          console.log("🔄 [Sync] พบข้อมูลใหม่! อัปเดตตารางเรียบร้อย");
+          console.log("🔄 [Sync] พบข้อมูลอัปเดตใหม่! กำลังวาดตารางใหม่...");
           localStorage.setItem(CACHE_KEY, freshRaw);
           events = freshEvents;
-          filterEvents();
+          filterEvents(); // อัปเดตตารางให้เป็นปัจจุบันทันที
+        } else {
+          console.log("✅ [Sync] ข้อมูลตรงกับ Cache แล้ว ไม่ต้องเรนเดอร์ซ้ำ");
         }
       }
     })
     .catch(err => {
-      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อ:", err);
+      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อเบื้องหลัง:", err);
       showLoader(false);
     });
 }
