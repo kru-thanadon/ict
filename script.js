@@ -89,11 +89,11 @@ function loadEventsFromServer() {
     }
   }
 
-  // 2. แอบยิงไปเช็คข้อมูลล่าสุดจาก GAS เบื้องหลังเงียบๆ (ไม่เปิด Loader บังหน้าจอ)
+  // 2. ยิง API เบื้องหลังเพื่อเช็คข้อมูลอัปเดตล่าสุดจาก GAS
   fetch(`${API_URL}?action=getEvents`)
     .then(response => response.json())
     .then(result => {
-      // เมื่อได้ข้อมูลสด ปิด Loader เผื่อกรณีที่เข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache
+      // เมื่อได้ข้อมูลสด ปิด Loader (เผื่อกรณีเข้าเว็บครั้งแรกแล้วยังไม่มี Cache)
       showLoader(false);
 
       if (result.status === 'success' && Array.isArray(result.data)) {
@@ -109,44 +109,13 @@ function loadEventsFromServer() {
         } else {
           console.log("✅ [Sync] ข้อมูลตรงกับ Cache แล้ว ไม่ต้องเรนเดอร์ซ้ำ");
         }
-      }
-    })
-    .catch(err => {
-      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อเบื้องหลัง:", err);
-      showLoader(false);
-    });
-}
-
-  // 2. ยิง API เบื้องหลังเพื่อเช็คข้อมูลอัปเดตล่าสุดจาก GAS
-  fetch(`${API_URL}?action=getEvents`)
-    .then(response => response.json())
-    .then(result => {
-      showLoader(false);
-
-      if (result.status === 'success' && Array.isArray(result.data)) {
-        const freshEvents = result.data;
-        const freshRaw = JSON.stringify(freshEvents);
-
-        // 3. เปรียบเทียบข้อมูลใหม่กับ Cache เดิม
-        if (freshRaw !== cachedRaw) {
-          console.log("🔄 [Sync] พบข้อมูลอัปเดตใหม่จากหลังบ้าน! กำลังบันทึก Cache และวาดปฏิทินใหม่...");
-          localStorage.setItem(CACHE_KEY, freshRaw);
-          events = freshEvents;
-          filterEvents();
-          if (!hasCache) showToast('โหลดข้อมูลกิจกรรมเรียบร้อยแล้ว', 'success');
-        } else {
-          console.log("✅ [Sync] ข้อมูลบนหน้าเว็บเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ใหม่");
-        }
       } else {
         throw new Error(result.message || 'โครงสร้างข้อมูลไม่ถูกต้อง');
       }
     })
     .catch(err => {
-      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อ:", err);
+      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อเบื้องหลัง:", err);
       showLoader(false);
-      if (!hasCache) {
-        showToast('การเชื่อมต่อล้มเหลว: ' + err.message, 'error');
-      }
     });
 }
 
