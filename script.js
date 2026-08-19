@@ -1,10 +1,15 @@
 // ========================================================================== 
-// External Website Calendar JS Engine (GAS Backend + Optimistic Cache Engine)
-// With Detailed Performance & Step Tracking Logs
+// External Website Calendar JS Engine (Cloudflare D1 + Supabase Storage)
+// With Optimistic Cache Engine & Detailed Logs
 // ==========================================================================
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbw5ufgADxQXqvm40HfAmKfoE4d5S1DvddgZ5ZgXIQwGYhFng5iKz3Ykhuvps6c1Kygt/exec';
-const CACHE_KEY = 'gas_calendar_events_cache';
+// 📌 1. กำหนดค่า API Endpoints & Configuration
+const WORKER_API_URL = 'https://ict.deaseler.workers.dev'; // 🔴 เปลี่ยนเป็น Worker URL ของคุณ
+const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02'; // 🔴 วาง Publishable Key ฉบับเต็มตรงนี้
+const SUPABASE_BUCKET = 'calendar-files';
+
+const CACHE_KEY = 'cf_calendar_events_cache';
 
 let currentDate = new Date();
 let currentView = 'month';
@@ -16,7 +21,7 @@ let selectedEvent = null;
 
 let startPicker = null;
 let endPicker = null;
-let selectedFile = null;
+let rawSelectedFile = null; // เก็บ File Object จริงสำหรับส่งเข้า Supabase
 let deleteExistingAttachment = false;
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -53,11 +58,11 @@ function initApp() {
   const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
   if (savedPwd) setAdminState(true, savedPwd);
 
-  // ⚡ 1. อ่าน Cache ขึ้นมาแสดงผลบน UI ทันที (Instant Load)
+  // ⚡ 1. อ่าน Cache ขึ้นมาแสดงผลบน UI ทันที (Instant Load 0ms)
   console.log(`[${new Date().toLocaleTimeString()}] ⚡ [Init Step 3/4] Triggering Instant Cache Load...`);
   loadFromCache();
 
-  // 📡 2. ยิง Silent Fetch ไปเทียบข้อมูลกับ GAS เบื้องหลัง
+  // 📡 2. ยิง Sync ดึงข้อมูลสดจาก Cloudflare D1
   console.log(`[${new Date().toLocaleTimeString()}] 📡 [Init Step 4/4] Triggering Background Server Sync...`);
   syncWithServer();
 
@@ -98,61 +103,103 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 Silent Fetch: ดึงข้อมูลสดจาก GAS แล้ว Compare เพื่ออัปเดตเฉพาะส่วนที่ต่าง
+ * 📡 Sync: ดึงข้อมูลสดจาก Cloudflare Worker + D1 Database
  */
 function syncWithServer() {
   const syncStartTime = performance.now();
-  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Sending HTTP GET to GAS Backend...`);
+  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Sync Start] Fetching events from Cloudflare D1...`);
 
-  fetch(`${API_URL}?action=getEvents`)
+  fetch(`${WORKER_API_URL}/api/events`)
     .then(res => {
-      console.log(`[${new Date().toLocaleTimeString()}] 📥 [Sync Response] Raw HTTP response received. Status: ${res.status}`);
-      return res.text();
+      if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
+      return res.json();
     })
-    .then(text => {
-      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
-        console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Sync Warning] Response is not valid JSON. Content:`, text);
-        return;
-      }
-      
-      const result = JSON.parse(text);
+    .then(dbEvents => {
       const syncEndTime = performance.now();
-      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [Sync Duration] Server responded in ${(syncEndTime - syncStartTime).toFixed(2)} ms`);
+      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [Sync Duration] D1 responded in ${(syncEndTime - syncStartTime).toFixed(2)} ms`);
 
-      if (result.status === 'success' && Array.isArray(result.data)) {
-        const serverEvents = result.data;
+      if (Array.isArray(dbEvents)) {
+        // แปลง Key จาก Database Schema ให้เข้ากับระบบ UI
+        const mappedEvents = dbEvents.map(item => ({
+          ID: String(item.id),
+          Title: item.title,
+          'Start Date': item.start_date,
+          'End Date': item.end_date,
+          Categories: item.categories || '',
+          Description: item.description || '',
+          Coordinator: item.coordinator || '',
+          President: item.president || '',
+          'Attachment URL': item.file_url || '',
+          Timestamp: item.created_at || ''
+        }));
+
         const currentCacheRaw = localStorage.getItem(CACHE_KEY) || '[]';
-        const serverRaw = JSON.stringify(serverEvents);
+        const serverRaw = JSON.stringify(mappedEvents);
 
         if (currentCacheRaw !== serverRaw) {
-          console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Sync Diff] Data mismatch detected! Updating local cache with ${serverEvents.length} items from server.`);
-          updateCacheAndRender(serverEvents);
+          console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Sync Diff] Updating cache with ${mappedEvents.length} items from D1.`);
+          updateCacheAndRender(mappedEvents);
         } else {
-          console.log(`[${new Date().toLocaleTimeString()}] ✅ [Sync In Sync] Local cache is up-to-date with server. No UI re-render required.`);
+          console.log(`[${new Date().toLocaleTimeString()}] ✅ [Sync In Sync] Cache up-to-date.`);
         }
-      } else {
-        console.error(`[${new Date().toLocaleTimeString()}] ❌ [Sync Error] API status failed:`, result.message);
       }
     })
-    .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Background network error:`, err));
+    .catch(err => console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Sync Failed] Error fetching from D1:`, err));
+}
+
+/**
+ * ☁️ อัปโหลดไฟล์โดยตรงเข้า Supabase Storage
+ */
+async function uploadToSupabase(file) {
+  if (!file) return null;
+  console.log(`[${new Date().toLocaleTimeString()}] ☁️ [Supabase Upload] Uploading "${file.name}"...`);
+
+  const fileExt = file.name.split('.').pop();
+  const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${fileName}`;
+
+  try {
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+        'apikey': SUPABASE_PUBLISHABLE_KEY,
+        'Content-Type': file.type
+      },
+      body: file
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Supabase upload failed: ${errText}`);
+    }
+
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${fileName}`;
+    console.log(`[${new Date().toLocaleTimeString()}] ✅ [Supabase Success] File URL: ${publicUrl}`);
+    return publicUrl;
+  } catch (err) {
+    console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Supabase Error]`, err);
+    throw err;
+  }
 }
 
 // ==========================================================================
 // 🚀 Optimistic CRUD Actions
 // ==========================================================================
 
-function handleFormSubmit(e) {
+async function handleFormSubmit(e) {
   e.preventDefault();
-  const actionType = document.getElementById('form-event-id').value ? 'UPDATE' : 'CREATE';
-  console.log(`[${new Date().toLocaleTimeString()}] 📝 [Form Submit] Executing ${actionType} Event Action...`);
-  console.time('🚀 Total Optimistic Submit Processing Time');
+  const eventId = document.getElementById('form-event-id').value;
+  const actionType = eventId ? 'UPDATE' : 'CREATE';
+  console.log(`[${new Date().toLocaleTimeString()}] 📝 [Form Submit] Executing ${actionType}...`);
+  showLoader(true, 'กำลังอัปโหลดไฟล์และบันทึกข้อมูล...');
 
   const categoryCbs = document.querySelectorAll('.form-category-checkbox');
   const checkedCategories = [];
   categoryCbs.forEach(cb => { if (cb.checked) checkedCategories.push(cb.value); });
 
   if (checkedCategories.length === 0) {
-    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Validation Failed] No category selected.`);
+    showLoader(false);
     showToast('กรุณาเลือกประเภทหมวดหมู่บริการอย่างน้อย 1 ประเภท', 'error');
     return;
   }
@@ -161,12 +208,26 @@ function handleFormSubmit(e) {
   const endDateObj = endPicker.selectedDates[0];
 
   if (!startDateObj || !endDateObj || endDateObj <= startDateObj) {
-    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [Validation Failed] Invalid date range.`);
+    showLoader(false);
     showToast('ช่วงเวลาไม่ถูกต้อง', 'error');
     return;
   }
 
-  const eventId = document.getElementById('form-event-id').value;
+  let uploadedFileUrl = selectedEvent ? selectedEvent['Attachment URL'] : null;
+
+  // 1. จัดการอัปโหลดไฟล์ลง Supabase Storage หากมีการเลือกไฟล์ใหม่
+  if (rawSelectedFile) {
+    try {
+      uploadedFileUrl = await uploadToSupabase(rawSelectedFile);
+    } catch (err) {
+      showLoader(false);
+      showToast('การอัปโหลดไฟล์แนบไม่สำเร็จ: ' + err.message, 'error');
+      return;
+    }
+  } else if (deleteExistingAttachment) {
+    uploadedFileUrl = null;
+  }
+
   const tempId = 'TEMP-' + Date.now();
   const eventData = {
     ID: eventId || tempId,
@@ -177,13 +238,14 @@ function handleFormSubmit(e) {
     Description: document.getElementById('form-desc-input').value.trim(),
     Coordinator: document.getElementById('form-coordinator-input') ? document.getElementById('form-coordinator-input').value.trim() : '',
     President: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : '',
+    'Attachment URL': uploadedFileUrl,
     Timestamp: formatToSheetDate(new Date())
   };
 
   closeFormModal();
+  showLoader(false);
 
-  // 1. ⚡ Optimistic UI Update ( Render ทันที 0ms )
-  console.log(`[${new Date().toLocaleTimeString()}] ⚡ [Optimistic UI] Updating UI locally with ID: ${eventData.ID}...`);
+  // 2. ⚡ Optimistic UI Update ( Render บนหน้าเว็บทันที )
   let updatedEvents = [...events];
   if (eventId) {
     updatedEvents = updatedEvents.map(evt => evt.ID === eventId ? { ...evt, ...eventData } : evt);
@@ -192,52 +254,37 @@ function handleFormSubmit(e) {
   }
   updateCacheAndRender(updatedEvents);
   showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
-  console.timeEnd('🚀 Total Optimistic Submit Processing Time');
 
-  // 2. 📡 Background Network Call
-  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Background POST] Sending payload to GAS Backend...`);
-  const apiStartTime = performance.now();
-
-  const requestBody = {
-    action: eventId ? 'updateEvent' : 'addEvent',
-    eventData: {
-      id: eventId,
-      title: eventData.Title,
-      startDate: eventData['Start Date'],
-      endDate: eventData['End Date'],
-      categories: eventData.Categories,
-      description: eventData.Description,
-      coordinator: eventData.Coordinator,
-      president: eventData.President,
-      deleteExistingAttachment: deleteExistingAttachment
-    },
-    fileData: selectedFile || null
+  // 3. 📡 บันทึกลง Cloudflare D1
+  const payload = {
+    id: eventId || undefined,
+    title: eventData.Title,
+    start_date: eventData['Start Date'],
+    end_date: eventData['End Date'],
+    categories: eventData.Categories,
+    description: eventData.Description,
+    coordinator: eventData.Coordinator,
+    president: eventData.President,
+    file_url: uploadedFileUrl
   };
 
-  if (eventId) requestBody.adminPassword = adminPassword;
-
-  fetch(API_URL, {
+  fetch(`${WORKER_API_URL}/api/events`, {
     method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(requestBody)
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   })
     .then(res => res.json())
     .then(result => {
-      const apiEndTime = performance.now();
-      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [GAS POST Complete] Background operation finished in ${(apiEndTime - apiStartTime).toFixed(2)} ms`);
-      
-      if (result.status === 'success') {
-        console.log(`[${new Date().toLocaleTimeString()}] ✅ [GAS Success] Event saved to Sheet successfully. Syncing server state...`);
+      if (result.success) {
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [D1 Success] Saved to Cloudflare D1.`);
         syncWithServer();
       } else {
-        throw new Error(result.message);
+        throw new Error(result.message || 'D1 insertion failed');
       }
     })
     .catch(err => {
-      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [GAS Failure] Failed to save to Sheet:`, err.message);
-      showToast('เกิดข้อผิดพลาดในการบันทึกไปยัง Sheet: ' + err.message, 'error');
-      console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Rollback Sync] Fetching real server state to reconcile UI...`);
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [D1 Error]`, err);
+      showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูลลงฐานข้อมูล', 'error');
       syncWithServer();
     });
 }
@@ -247,47 +294,30 @@ function triggerDeleteEvent() {
   if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
 
   const targetId = selectedEvent.ID;
-  console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [Delete Initiated] ID: ${targetId} ("${selectedEvent.Title}")`);
-  console.time('🚀 Optimistic Delete Processing Time');
-
+  console.log(`[${new Date().toLocaleTimeString()}] 🗑️ [Delete Initiated] ID: ${targetId}`);
   closeDetailModal();
 
   // 1. ⚡ Optimistic Delete UI
   const updatedEvents = events.filter(evt => evt.ID !== targetId);
   updateCacheAndRender(updatedEvents);
   showToast('ลบรายการเรียบร้อยแล้ว', 'success');
-  console.timeEnd('🚀 Optimistic Delete Processing Time');
 
-  // 2. 📡 Background Network Delete Call
-  console.log(`[${new Date().toLocaleTimeString()}] 📡 [Background POST] Requesting deletion on GAS Backend...`);
-  const apiStartTime = performance.now();
-
-  fetch(API_URL, {
-    method: 'POST',
-    redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'deleteEvent',
-      eventId: targetId,
-      adminPassword: adminPassword
-    })
+  // 2. 📡 ยิงลบข้อมูลที่ Cloudflare Worker API
+  fetch(`${WORKER_API_URL}/api/events?id=${targetId}`, {
+    method: 'DELETE'
   })
     .then(res => res.json())
     .then(result => {
-      const apiEndTime = performance.now();
-      console.log(`[${new Date().toLocaleTimeString()}] ⏱️ [GAS Delete Complete] Deletion finished in ${(apiEndTime - apiStartTime).toFixed(2)} ms`);
-
-      if (result.status === 'success') {
-        console.log(`[${new Date().toLocaleTimeString()}] ✅ [GAS Success] Item removed from Sheet & Drive. Re-verifying state...`);
+      if (result.success) {
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ [D1 Delete Success] Item removed.`);
         syncWithServer();
       } else {
-        throw new Error(result.message);
+        throw new Error('Delete failed');
       }
     })
     .catch(err => {
-      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Delete Failed] Could not delete on Sheet:`, err.message);
-      showToast('ลบใน Sheet ไม่สำเร็จ: ' + err.message, 'error');
-      console.log(`[${new Date().toLocaleTimeString()}] 🔄 [Rollback Sync] Restoring previous events from server...`);
+      console.error(`[${new Date().toLocaleTimeString()}] 🚨 [Delete Error]`, err);
+      showToast('การลบข้อมูลในฐานข้อมูลไม่สำเร็จ', 'error');
       syncWithServer();
     });
 }
@@ -309,7 +339,7 @@ function showLoader(show, text) {
 }
 
 function showToast(message, type = 'info') {
-  console.log(`[${new Date().toLocaleTimeString()}] 🔔 [Toast Notification] (${type.toUpperCase()}): ${message}`);
+  console.log(`[${new Date().toLocaleTimeString()}] 🔔 [Toast] (${type.toUpperCase()}): ${message}`);
   const container = document.getElementById('toast-container');
   if (!container) return;
   const toast = document.createElement('div');
@@ -337,7 +367,6 @@ function closeAdminModal() { document.getElementById('admin-modal').classList.re
 function setAdminState(adminLogged, password) {
   isAdmin = adminLogged;
   adminPassword = password;
-  console.log(`[${new Date().toLocaleTimeString()}] 🔒 [Admin Auth State] Logged in: ${isAdmin}`);
   
   const statusBadge = document.getElementById('admin-status');
   const statusText = document.getElementById('admin-status-text');
@@ -481,13 +510,11 @@ function filterEvents() {
     return matchText && matchCategory;
   });
 
-  console.log(`[${new Date().toLocaleTimeString()}] 🔍 [Filter Events] ${filteredEvents.length}/${events.length} events matched criteria.`);
   renderCalendar();
 }
 
 function switchView(view) {
   currentView = view;
-  console.log(`[${new Date().toLocaleTimeString()}] 👁️ [View Switch] Changed calendar view to: ${view}`);
   document.getElementById('view-month-btn').classList.toggle('active', view === 'month');
   document.getElementById('view-week-btn').classList.toggle('active', view === 'week');
   document.getElementById('calendar-grid').classList.toggle('week-view', view === 'week');
@@ -509,7 +536,6 @@ function navigateToday() {
 }
 
 function renderCalendar() {
-  console.time('🎨 Calendar Render Time');
   const grid = document.getElementById('calendar-grid');
   if (!grid) return;
   grid.innerHTML = '';
@@ -533,7 +559,6 @@ function renderCalendar() {
     renderWeekView(grid);
   }
   updateDashboard();
-  console.timeEnd('🎨 Calendar Render Time');
 }
 
 function renderMonthView(gridContainer) {
@@ -642,7 +667,6 @@ function getEventsForDate(targetDate) {
 }
 
 function openDetailModal(eventObj) {
-  console.log(`[${new Date().toLocaleTimeString()}] 🔍 [View Detail] Opening modal for event ID: ${eventObj.ID}`);
   selectedEvent = eventObj;
   document.getElementById('detail-title').innerText = eventObj.Title;
   document.getElementById('detail-start').innerText = formatDisplayDate(eventObj['Start Date']);
@@ -688,7 +712,6 @@ function closeDetailModal() {
 
 function triggerEditEvent() {
   if (!selectedEvent) return;
-  console.log(`[${new Date().toLocaleTimeString()}] ✏️ [Edit Triggered] Preparing form for ID: ${selectedEvent.ID}`);
   closeDetailModal();
 
   document.getElementById('form-event-id').value = selectedEvent.ID;
@@ -710,7 +733,6 @@ function triggerEditEvent() {
 }
 
 function openAddEventModal() {
-  console.log(`[${new Date().toLocaleTimeString()}] ➕ [Add Event] Opening new event modal...`);
   document.getElementById('form-event-id').value = '';
   document.getElementById('form-title-input').value = '';
   document.getElementById('form-desc-input').value = '';
@@ -735,32 +757,22 @@ function closeFormModal() { document.getElementById('form-modal').classList.remo
 function handleFileSelection(event) {
   const file = event.target.files[0];
   if (!file) return;
-  console.log(`[${new Date().toLocaleTimeString()}] 📁 [File Selected] File Name: ${file.name}, Size: ${(file.size / 1024).toFixed(1)} KB`);
 
   if (file.size > 10 * 1024 * 1024) {
-    console.warn(`[${new Date().toLocaleTimeString()}] ⚠️ [File Oversized] Selected file exceeds 10MB limit.`);
     showToast('ไฟล์มีขนาดเกินข้อกำหนดสูงสุด (10MB)', 'error');
     clearFileSelection();
     return;
   }
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    selectedFile = {
-      bytes: e.target.result.split(',')[1],
-      name: file.name,
-      mimeType: file.type
-    };
-    console.log(`[${new Date().toLocaleTimeString()}] 📁 [Base64 Conversion] File converted to Base64 stream.`);
-    document.getElementById('selected-file-name').innerText = file.name;
-    document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
-    document.getElementById('selected-file-display').classList.remove('hidden');
-    document.querySelector('.dropzone-prompt').classList.add('hidden');
-  };
-  reader.readAsDataURL(file);
+  
+  rawSelectedFile = file; // บันทึกไฟล์ไว้ส่งผ่าน Fetch Body
+  document.getElementById('selected-file-name').innerText = file.name;
+  document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('selected-file-display').classList.remove('hidden');
+  document.querySelector('.dropzone-prompt').classList.add('hidden');
 }
 
 function clearFileSelection() {
-  selectedFile = null;
+  rawSelectedFile = null;
   if (document.getElementById('form-file-input')) document.getElementById('form-file-input').value = '';
   if (document.getElementById('selected-file-display')) document.getElementById('selected-file-display').classList.add('hidden');
   if (document.querySelector('.dropzone-prompt')) document.querySelector('.dropzone-prompt').classList.remove('hidden');
