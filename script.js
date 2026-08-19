@@ -1,9 +1,12 @@
 // ========================================================================== 
-// External Website Calendar JS Engine (API Connected)
+// External Website Calendar JS Engine (API Connected + Smart Cache)
 // ==========================================================================
 
 // 🔴 นำ URL Web App ของ Google Apps Script มาใส่ที่นี่ 🔴
 const API_URL = 'https://script.google.com/macros/s/AKfycbw5ufgADxQXqvm40HfAmKfoE4d5S1DvddgZ5ZgXIQwGYhFng5iKz3Ykhuvps6c1Kygt/exec';
+
+// Key สำหรับเก็บบันทึก Cache ลงใน LocalStorage
+const CACHE_KEY = 'gas_calendar_events_cache';
 
 // Global Application State
 let currentDate = new Date();
@@ -24,14 +27,14 @@ let deleteExistingAttachment = false;
 
 document.addEventListener('DOMContentLoaded', function () {
   initApp();
+  if (typeof initTheme === 'function') initTheme();
 });
 
 /**
  * ตั้งค่าเริ่มต้นแอป และโหลดปฏิทิน (พร้อมตั้งค่า Flatpickr ปี พ.ศ.)
  */
 function initApp() {
-  console.log("🚀 [System] เริ่มต้นระบบปฏิทินงานประสานผ่าน API...");
-  showLoader(true, 'กำลังเชื่อมต่อฐานข้อมูล...');
+  console.log("🚀 [System] เริ่มต้นระบบปฏิทินงานประสานผ่าน API (Smart Cache Active)...");
 
   const flatpickrConfig = {
     enableTime: true,
@@ -64,54 +67,80 @@ function initApp() {
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรมทั้งหมดจาก Server
+ * 🌐 GET API: โหลดข้อมูลกิจกรรมทั้งหมดด้วยระบบ Smart Cache & Background Sync
  */
 function loadEventsFromServer() {
-  console.log("🌐 [API] 1. เริ่มกระบวนการดึงข้อมูลจาก API: ", API_URL);
-  showLoader(true, 'กำลังโหลดตารางงาน...');
+  console.log("🌐 [API] 1. เริ่มกระบวนการดึงข้อมูล...");
 
+  // 1. ดึง Cache จาก LocalStorage ขึ้นมาแสดงผลทันทีก่อน (ถ้ามี)
+  const cachedRaw = localStorage.getItem(CACHE_KEY);
+  let hasCache = false;
+
+  if (cachedRaw) {
+    try {
+      events = JSON.parse(cachedRaw);
+      hasCache = true;
+      console.log(`⚡ [Cache] โหลดข้อมูลจาก Cache สำเร็จ พบ ${events.length} รายการ (แสดงผลทันที)`);
+      filterEvents();
+    } catch (e) {
+      console.error("⚠️ [Cache] โหลด Cache ล้มเหลว รูปแบบไม่ถูกต้อง:", e);
+      localStorage.removeItem(CACHE_KEY);
+    }
+  }
+
+  // หากไม่มี Cache ให้เปิด Loader หมุนรอ
+  if (!hasCache) {
+    showLoader(true, 'กำลังโหลดตารางงาน...');
+  }
+
+  // 2. ยิง API เบื้องหลังเพื่อเช็คข้อมูลอัปเดตล่าสุดจาก GAS
   fetch(`${API_URL}?action=getEvents`)
-    .then(response => {
-      console.log("📥 [API] 2. ได้รับการตอบกลับจาก Server, HTTP Status:", response.status);
-      return response.json();
-    })
+    .then(response => response.json())
     .then(result => {
-      console.log("📦 [API] 3. แกะกล่องข้อมูล JSON ที่ได้จาก Server:", result);
       showLoader(false);
 
-      if (result.status === 'success') {
-        console.log(`✅ [API] 4. โหลดข้อมูลสำเร็จ พบกิจกรรมทั้งหมด ${result.data.length} รายการ`);
-        events = result.data;
+      if (result.status === 'success' && Array.isArray(result.data)) {
+        const freshEvents = result.data;
+        const freshRaw = JSON.stringify(freshEvents);
 
-        // --- ส่วนพิเศษสำหรับ Debug การแปลงวันที่ (เช็ค 3 รายการแรก) ---
-        console.log("🕵️‍♂️ [Debug] ตรวจสอบการอ่านวันที่ (เช็คจาก 3 รายการแรก):");
-        events.slice(0, 3).forEach((evt, idx) => {
-          console.log(`   [รายการที่ ${idx + 1}] ID: ${evt.ID} | ชื่อ: ${evt.Title}`);
-          console.log(`     - Start Date (ดิบจากชีต): "${evt['Start Date']}" => แปลงผลลัพธ์ได้:`, parseSheetDate(evt['Start Date']));
-          console.log(`     - End Date (ดิบจากชีต): "${evt['End Date']}" => แปลงผลลัพธ์ได้:`, parseSheetDate(evt['End Date']));
-        });
-        // --------------------------------------------------------
-
-        filterEvents();
-        showToast('โหลดข้อมูลกิจกรรมเรียบร้อยแล้ว', 'success');
+        // 3. เปรียบเทียบข้อมูลใหม่กับ Cache เดิม
+        if (freshRaw !== cachedRaw) {
+          console.log("🔄 [Sync] พบข้อมูลอัปเดตใหม่จากหลังบ้าน! กำลังบันทึก Cache และวาดปฏิทินใหม่...");
+          localStorage.setItem(CACHE_KEY, freshRaw);
+          events = freshEvents;
+          filterEvents();
+          if (!hasCache) showToast('โหลดข้อมูลกิจกรรมเรียบร้อยแล้ว', 'success');
+        } else {
+          console.log("✅ [Sync] ข้อมูลบนหน้าเว็บเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ใหม่");
+        }
       } else {
-        console.error("❌ [API] Server แจ้งเตือน Error:", result.message);
-        throw new Error(result.message);
+        throw new Error(result.message || 'โครงสร้างข้อมูลไม่ถูกต้อง');
       }
     })
     .catch(err => {
-      console.error("🚨 [API] เกิดข้อผิดพลาดร้ายแรงในการเชื่อมต่อ:", err);
+      console.error("🚨 [API] เกิดข้อผิดพลาดในการเชื่อมต่อ:", err);
       showLoader(false);
-      showToast('การเชื่อมต่อล้มเหลว: ' + err.message, 'error');
+      if (!hasCache) {
+        showToast('การเชื่อมต่อล้มเหลว: ' + err.message, 'error');
+      }
     });
+}
+
+/**
+ * 🧹 ล้าง Cache เมื่อมีการแก้ไข/ลบ/เพิ่มข้อมูลสำเร็จ
+ */
+function clearEventsCache() {
+  localStorage.removeItem(CACHE_KEY);
+  console.log("🧹 [Cache] ล้าง Cache ทิ้งเรียบร้อยแล้ว");
 }
 
 function showLoader(show, text) {
   const loaderTextValue = text || 'กำลังทำงาน...';
   const loader = document.getElementById('loading-overlay');
+  if (!loader) return;
   const loaderText = loader.querySelector('.loading-text');
   if (show) {
-    loaderText.innerText = loaderTextValue;
+    if (loaderText) loaderText.innerText = loaderTextValue;
     loader.classList.add('active');
   } else {
     loader.classList.remove('active');
@@ -121,6 +150,7 @@ function showLoader(show, text) {
 function showToast(message, type) {
   const toastType = type || 'info';
   const container = document.getElementById('toast-container');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = 'toast toast-' + toastType;
 
@@ -158,15 +188,19 @@ function setAdminState(adminLogged, password) {
   const actionBtn = document.getElementById('admin-action-btn');
 
   if (adminLogged) {
-    statusBadge.className = 'admin-badge admin-badge-logged';
-    statusText.innerHTML = '<i class="fa-solid fa-shield-check"></i> โหมดผู้ดูแลระบบ (Admin)';
-    actionBtn.innerHTML = '<i class="fa-solid fa-lock-open"></i> ออกจากระบบ Admin';
-    actionBtn.setAttribute('onclick', 'logoutAdmin()');
+    if (statusBadge) statusBadge.className = 'admin-badge admin-badge-logged';
+    if (statusText) statusText.innerHTML = '<i class="fa-solid fa-shield-check"></i> โหมดผู้ดูแลระบบ (Admin)';
+    if (actionBtn) {
+      actionBtn.innerHTML = '<i class="fa-solid fa-lock-open"></i> ออกจากระบบ Admin';
+      actionBtn.setAttribute('onclick', 'logoutAdmin()');
+    }
   } else {
-    statusBadge.className = 'admin-badge admin-badge-guest';
-    statusText.innerText = 'โหมดผู้ใช้งานทั่วไป';
-    actionBtn.innerHTML = '<i class="fa-solid fa-lock"></i> เข้าสู่ระบบ Admin';
-    actionBtn.setAttribute('onclick', 'openAdminModal()');
+    if (statusBadge) statusBadge.className = 'admin-badge admin-badge-guest';
+    if (statusText) statusText.innerText = 'โหมดผู้ใช้งานทั่วไป';
+    if (actionBtn) {
+      actionBtn.innerHTML = '<i class="fa-solid fa-lock"></i> เข้าสู่ระบบ Admin';
+      actionBtn.setAttribute('onclick', 'openAdminModal()');
+    }
   }
 
   updateAdminActionButtonsVisibility();
@@ -176,7 +210,6 @@ function submitAdminPassword() {
   const pwdInput = document.getElementById('admin-password-input').value;
   if (!pwdInput) return;
 
-  // บันทึกรหัสผ่านไว้ชั่วคราว ถ้ารหัสผิดระบบจะแจ้งเตือนตอนพยายามลบ/แก้ไขข้อมูล
   localStorage.setItem('gas_calendar_admin_pwd', pwdInput);
   setAdminState(true, pwdInput);
   closeAdminModal();
@@ -193,31 +226,27 @@ function updateAdminActionButtonsVisibility() {
   const deleteBtn = document.getElementById('admin-delete-btn');
   const editBtn = document.getElementById('admin-edit-btn');
   if (isAdmin) {
-    deleteBtn.classList.remove('hidden');
-    editBtn.classList.remove('hidden');
+    if (deleteBtn) deleteBtn.classList.remove('hidden');
+    if (editBtn) editBtn.classList.remove('hidden');
   } else {
-    deleteBtn.classList.add('hidden');
-    editBtn.classList.add('hidden');
+    if (deleteBtn) deleteBtn.classList.add('hidden');
+    if (editBtn) editBtn.classList.add('hidden');
   }
 }
 
 // ==========================================================================
-// Date Utility & Parse Engine (ลบวงเล็บภาษาไทยทิ้งก่อนประมวลผล)
+// Date Utility & Parse Engine
 // ==========================================================================
 function parseSheetDate(dateStr) {
   if (!dateStr) return null;
 
-  // 1. ลบข้อความในวงเล็บ เช่น (เวลาอินโดจีน) ออก เพื่อไม่ให้เบราว์เซอร์สับสน
   let cleanStr = String(dateStr).replace(/\(.*?\)/g, '').trim();
 
-  // 2. ลองให้ Javascript ประมวลผลแบบอัตโนมัติ 
-  // (หลังจากตัดวงเล็บทิ้ง จะเหลือแค่ "Thu Jun 18 2026 13:00:00 GMT+0700" ซึ่งอ่านได้ 100%)
   const autoDate = new Date(cleanStr);
   if (!isNaN(autoDate.getTime())) {
     return autoDate;
   }
 
-  // 3. Fallback เผื่อเจอรูปแบบอื่นๆ (เช่น 18 มิถุนายน 2569)
   try {
     cleanStr = cleanStr.replace('T', ' ');
     const parts = cleanStr.split(' ');
@@ -311,13 +340,8 @@ function getSelectedCategoryFilters() {
 function handleSearchFilter() { filterEvents(); }
 
 function filterEvents() {
-  console.log("🔍 [Filter] เริ่มคัดกรองข้อมูลกิจกรรม...");
-
-  const searchQuery = document.getElementById('search-input').value.toLowerCase().trim();
+  const searchQuery = document.getElementById('search-input') ? document.getElementById('search-input').value.toLowerCase().trim() : '';
   const selectedCategories = getSelectedCategoryFilters();
-
-  console.log(`   - คำค้นหา: "${searchQuery}"`);
-  console.log(`   - หมวดหมู่ที่ติ๊กเลือก:`, selectedCategories);
 
   filteredEvents = events.filter(evt => {
     const matchText = !searchQuery ||
@@ -333,7 +357,6 @@ function filterEvents() {
     return matchText && matchCategory;
   });
 
-  console.log(`✅ [Filter] คัดกรองเสร็จสิ้น: นำไปแสดงผล ${filteredEvents.length} รายการ (จากทั้งหมด ${events.length})`);
   renderCalendar();
 }
 
@@ -363,9 +386,8 @@ function navigateToday() {
 }
 
 function renderCalendar() {
-  console.log(`🎨 [Render] เริ่มวาดตารางปฏิทิน | มุมมอง: ${currentView} | วันอ้างอิง: ${currentDate.toDateString()}`);
-
   const grid = document.getElementById('calendar-grid');
+  if (!grid) return;
   grid.innerHTML = '';
 
   const currentMonthName = THAI_MONTHS_FULL[currentDate.getMonth()];
@@ -388,7 +410,6 @@ function renderCalendar() {
     renderWeekView(grid);
   }
 
-  console.log(`📊 [Dashboard] อัปเดตตัวเลขสถิติด้านล่าง...`);
   updateDashboard();
 }
 
@@ -543,12 +564,10 @@ function openDetailModal(eventObj) {
 
   const timestampEl = document.getElementById('detail-timestamp');
   if (timestampEl) {
-    // เช็กค่าจากคอลัมน์ Created At หรือ Timestamp แล้วนำไปจัดรูปแบบเป็นภาษาไทย
     const rawTime = eventObj.Timestamp;
     timestampEl.innerText = rawTime ? formatDisplayDate(rawTime) : 'ไม่มีข้อมูล';
   }
 
-  // ดึง Element แจ้งเตือน (หรือสร้างใหม่ขึ้นมาแสดง)
   const warningEl = document.getElementById('detail-warning-notice');
 
   const startDateObj = parseSheetDate(eventObj['Start Date']);
@@ -556,11 +575,9 @@ function openDetailModal(eventObj) {
   const timestampObj = parseSheetDate(rawTime);
 
   if (startDateObj && timestampObj) {
-    // คำนวณส่วนต่างเวลาเป็นวัน (Millisecond -> Days)
     const diffInMs = startDateObj - timestampObj;
     const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
 
-    // ถ้าห่างกันน้อยกว่า 3 วัน (หรือจองย้อนหลัง)
     if (diffInDays < 3) {
       if (warningEl) {
         warningEl.innerText = '⚠️ กรุณาติดต่อล่วงหน้าอย่างน้อย 3 วัน';
@@ -677,6 +694,7 @@ function triggerDeleteEvent() {
       showLoader(false);
       if (result.status === 'success') {
         showToast('ลบรายการกิจกรรมเรียบร้อยแล้ว', 'success');
+        clearEventsCache(); // 🧹 ล้าง Cache เมื่อลบข้อมูลสำเร็จ
         loadEventsFromServer();
       } else {
         throw new Error(result.message);
@@ -848,7 +866,6 @@ function handleFormSubmit(e) {
   closeFormModal();
   showLoader(true, eventId ? 'กำลังแก้ไขข้อมูลผ่าน API...' : 'กำลังบันทึกข้อมูลผ่าน API...');
 
-  // สร้าง Payload เพื่อส่งไปยัง Backend
   const requestBody = {
     action: eventId ? 'updateEvent' : 'addEvent',
     eventData: eventData,
@@ -864,7 +881,7 @@ function handleFormSubmit(e) {
   fetch(API_URL, {
     method: 'POST',
     redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // กัน CORS Preflight สำหรับ GAS
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(requestBody)
   })
     .then(res => res.json())
@@ -872,6 +889,7 @@ function handleFormSubmit(e) {
       showLoader(false);
       if (result.status === 'success') {
         showToast(eventId ? 'แก้ไขข้อมูลกิจกรรมสำเร็จ' : 'เพิ่มกิจกรรมใหม่สำเร็จ', 'success');
+        clearEventsCache(); // 🧹 ล้าง Cache เมื่อบันทึก/แก้ไขสำเร็จ
         loadEventsFromServer();
       } else {
         throw new Error(result.message);
@@ -967,12 +985,12 @@ function updateDashboard() {
     }
   });
 
-  document.getElementById('stat-month-total').innerText = monthTotal;
-  document.getElementById('stat-today-total').innerText = todayTotal;
-  document.getElementById('stat-cat-photo').innerText = countPhoto;
-  document.getElementById('stat-cat-video').innerText = countVideo;
-  document.getElementById('stat-cat-audio-ff').innerText = countAudioFF;
-  document.getElementById('stat-cat-audio-obj').innerText = countAudioObj;
+  if (document.getElementById('stat-month-total')) document.getElementById('stat-month-total').innerText = monthTotal;
+  if (document.getElementById('stat-today-total')) document.getElementById('stat-today-total').innerText = todayTotal;
+  if (document.getElementById('stat-cat-photo')) document.getElementById('stat-cat-photo').innerText = countPhoto;
+  if (document.getElementById('stat-cat-video')) document.getElementById('stat-cat-video').innerText = countVideo;
+  if (document.getElementById('stat-cat-audio-ff')) document.getElementById('stat-cat-audio-ff').innerText = countAudioFF;
+  if (document.getElementById('stat-cat-audio-obj')) document.getElementById('stat-cat-audio-obj').innerText = countAudioObj;
 
   upcomingEvents.sort((a, b) => {
     const aDate = parseSheetDate(a['Start Date']) || new Date();
@@ -981,44 +999,36 @@ function updateDashboard() {
   });
 
   const upcomingList = document.getElementById('upcoming-list');
-  upcomingList.innerHTML = '';
+  if (upcomingList) {
+    upcomingList.innerHTML = '';
+    const topUpcoming = upcomingEvents.slice(0, 4);
 
-  const topUpcoming = upcomingEvents.slice(0, 4);
+    if (topUpcoming.length === 0) {
+      upcomingList.innerHTML = '<div class="upcoming-empty">ไม่มีกิจกรรมประสานงานที่กำลังจะมาถึงเร็ว ๆ นี้</div>';
+    } else {
+      topUpcoming.forEach(evt => {
+        const card = document.createElement('div');
+        card.className = 'upcoming-card';
+        card.onclick = function () { openDetailModal(evt); };
 
-  if (topUpcoming.length === 0) {
-    upcomingList.innerHTML = '<div class="upcoming-empty">ไม่มีกิจกรรมประสานงานที่กำลังจะมาถึงเร็ว ๆ นี้</div>';
-  } else {
-    topUpcoming.forEach(evt => {
-      const card = document.createElement('div');
-      card.className = 'upcoming-card';
-      card.onclick = function () { openDetailModal(evt); };
+        card.innerHTML =
+          '<div class="upcoming-info">' +
+          '<span class="upcoming-title">' + evt.Title + '</span>' +
+          '<span class="upcoming-time"><i class="fa-regular fa-clock"></i> ' + formatDisplayDate(evt['Start Date']) + '</span>' +
+          '</div>' +
+          '<i class="fa-solid fa-chevron-right text-muted" style="font-size:0.75rem;"></i>';
 
-      card.innerHTML =
-        '<div class="upcoming-info">' +
-        '<span class="upcoming-title">' + evt.Title + '</span>' +
-        '<span class="upcoming-time"><i class="fa-regular fa-clock"></i> ' + formatDisplayDate(evt['Start Date']) + '</span>' +
-        '</div>' +
-        '<i class="fa-solid fa-chevron-right text-muted" style="font-size:0.75rem;"></i>';
-
-      upcomingList.appendChild(card);
-    });
+        upcomingList.appendChild(card);
+      });
+    }
   }
 }
 
-
-
-
-
-
-
-
-
-/**
- * ฟังก์ชันเริ่มต้นธีม (เรียกใช้เมื่อโหลดหน้าเว็บเสร็จ)
- */
+// ==========================================================================
+// Theme Controller
+// ==========================================================================
 function initTheme() {
   const savedTheme = localStorage.getItem('theme');
-  // จะเปิดโหมดมืด เฉพาะเมื่อผู้ใช้เคยเปิดทิ้งไว้ก่อนหน้านี้เท่านั้น นอกนั้นเริ่มด้วยโหมดสว่างเสมอ
   const isDark = (savedTheme === 'dark');
 
   if (isDark) {
@@ -1028,25 +1038,14 @@ function initTheme() {
   }
 
   updateThemeButtonUI(isDark);
-  console.log(`🌓 [Theme] ธีมเริ่มต้นถูกกำหนดเป็น: ${isDark ? 'โหมดมืด (Dark)' : 'โหมดสว่าง (Light)'}`);
 }
 
-/**
- * ฟังก์ชันสำหรับคลิกสลับธีม
- */
 function toggleTheme() {
   const isDark = document.body.classList.toggle('dark-mode');
-
-  // บันทึกตัวเลือกเก็บไว้ในเบราว์เซอร์
   localStorage.setItem('theme', isDark ? 'dark' : 'light');
-
   updateThemeButtonUI(isDark);
-  console.log(`🌓 [Theme] สลับธีมผู้ใช้เป็น: ${isDark ? 'โหมดมืด' : 'โหมดสว่าง'}`);
 }
 
-/**
- * อัปเดตไอคอนและข้อความบนปุ่มกดตามสถานะจริง
- */
 function updateThemeButtonUI(isDark) {
   const btn = document.getElementById('theme-toggle-btn');
   if (!btn) return;
@@ -1057,5 +1056,3 @@ function updateThemeButtonUI(isDark) {
     btn.innerHTML = '<i class="fa-solid fa-moon"></i> โหมดมืด';
   }
 }
-
-// และเพิ่มการเรียกใช้ initTheme(); ไว้ในส่วนของการเริ่มระบบงานเช่นเคยครับ
