@@ -67,13 +67,13 @@ function initApp() {
 }
 
 /**
- * 🌐 GET API: โหลดข้อมูลกิจกรรม (Silent Sync + Detailed Logging & Execution Time)
+ * 🌐 GET API: โหลดข้อมูลกิจกรรม (Silent Sync + Safety Guard & Detailed Logging)
  */
 function loadEventsFromServer() {
-  const startTime = performance.now(); // ⏱️ เริ่มจับเวลา
+  const startTime = performance.now();
   console.log("🚀 [System Sync] เริ่มกระบวนการโหลดและประสานข้อมูลระบบ...");
 
-  // 1. อ่าน Cache ในเครื่องมาแสดงบนหน้าจอทันที (ถ้ามี)
+  // 1. อ่าน Cache ในเครื่องมาแสดงบนหน้าจอทันที
   const cachedRaw = localStorage.getItem(CACHE_KEY);
 
   if (cachedRaw) {
@@ -82,25 +82,36 @@ function loadEventsFromServer() {
       const cacheTime = (performance.now() - startTime).toFixed(2);
       console.log(`⚡ [Cache Loaded] แสดงผลจาก Local Cache สำเร็จ (${events.length} รายการ) | ใช้เวลา: ${cacheTime} ms`);
       
-      // วาดตารางทันที และปิด Loader บังหน้าจอออกทันที
       filterEvents();
-      showLoader(false); 
+      showLoader(false); // ปิดหน้าหมุนทันที
     } catch (e) {
-      console.error("⚠️ [Cache Error] รูปแบบ Cache เสียหาย ไม่สามารถใช้งานได้:", e);
+      console.error("⚠️ [Cache Error] รูปแบบ Cache เสียหาย:", e);
     }
   } else {
     console.log("ℹ️ [Cache Info] ไม่พบข้อมูลใน Local Cache (ระบบจะรอรับข้อมูลจาก API)...");
   }
 
-  // 2. แอบยิงไปดึงข้อมูลสดจาก GAS เบื้องหลังเงียบๆ
+  // 2. ดึงข้อมูลสดจาก GAS เบื้องหลัง
   console.log("📡 [Background Sync] กำลังส่ง Request ไปยัง Google Apps Script API...");
-  const apiStartTime = performance.now(); // ⏱️ จับเวลาเฉพาะฝั่ง API
+  const apiStartTime = performance.now();
 
   fetch(`${API_URL}?action=getEvents`)
-    .then(response => response.json())
-    .then(result => {
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP Error Status: ${response.status}`);
+      }
+      return response.text(); // อ่านเป็น Text ก่อนเพื่อเช็คว่าเป็น JSON จริงหรือไม่ ป้องกัน SyntaxError
+    })
+    .then(text => {
       const apiDuration = (performance.now() - apiStartTime).toFixed(2);
-      showLoader(false); // เผื่อกรณีเข้าเว็บครั้งแรกสุดที่ยังไม่มี Cache
+      showLoader(false);
+
+      // เช็คว่า response ตอบกลับมาเป็น HTML ( Error Page) หรือไม่
+      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
+        throw new Error("API ตอบกลับเป็น HTML/Text ไม่ใช่ JSON (ลิงก์ GAS อาจหมดอายุ หรือยังไม่ได้ตั้งค่า Permission เป็น Anyone)");
+      }
+
+      const result = JSON.parse(text);
 
       if (result.status === 'success' && Array.isArray(result.data)) {
         console.log(`📥 [API Response] ได้รับข้อมูลสดจาก GAS สำเร็จ | เวลาตอบกลับ API: ${apiDuration} ms`);
@@ -108,7 +119,7 @@ function loadEventsFromServer() {
         const freshEvents = result.data;
         const freshRaw = JSON.stringify(freshEvents);
 
-        // 3. เช็คว่าข้อมูลสดต่างจาก Cache บนหน้าจอหรือไม่
+        // 3. ตรวจสอบการเปลี่ยนแปลงของข้อมูล
         if (freshRaw !== cachedRaw) {
           console.log("🔄 [Data Changed] พบการเปลี่ยนแปลงของข้อมูล! กำลังบันทึก Cache และวาดตารางใหม่...");
           
@@ -120,7 +131,7 @@ function loadEventsFromServer() {
           console.log(`✅ [Sync Completed] อัปเดตตารางหน้าเว็บเรียบร้อยแล้ว! | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
         } else {
           const totalTime = (performance.now() - startTime).toFixed(2);
-          console.log(`✅ [Sync Completed] ข้อมูลบนหน้าเว็บเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ซ้ำ | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
+          console.log(`✅ [Sync Completed] ข้อมูลเป็นปัจจุบันแล้ว ไม่ต้องเรนเดอร์ซ้ำ | รวมเวลาทั้งสิ้น: ${totalTime} ms`);
         }
       } else {
         throw new Error(result.message || 'โครงสร้างข้อมูลตอบกลับไม่ถูกต้อง');
@@ -128,18 +139,14 @@ function loadEventsFromServer() {
     })
     .catch(err => {
       const apiDuration = (performance.now() - apiStartTime).toFixed(2);
-      console.error(`🚨 [Sync Failed] การดึงข้อมูลเบื้องหลังล้มเหลว (${apiDuration} ms):`, err);
-      showLoader(false);
+      console.error(`🚨 [Sync Failed] การดึงข้อมูลเบื้องหลังล้มเหลว (${apiDuration} ms):`, err.message);
+      showLoader(false); // ปิด Loader เสมอแม้จะเกิด Error
     });
 }
 
-/**
- * 🧹 ฟังก์ชันนี้ไม่จำเป็นต้องถูกเรียกใช้แล้ว (ยกเลิกการล้าง Cache)
- */
 function clearEventsCache() {
-  // ปล่อยว่างไว้เพื่อไม่ให้โค้ดส่วนอื่นที่เผลอเรียกใช้งานเกิด Error
+  // ไม่ล้าง Cache เพื่อรักษาการดึงข้อมูลจากเครื่อง
 }
-
 function showLoader(show, text) {
   const loaderTextValue = text || 'กำลังทำงาน...';
   const loader = document.getElementById('loading-overlay');
