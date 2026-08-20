@@ -1,13 +1,10 @@
 // ========================================================================== 
 // External Website Calendar JS Engine
-// Cloudflare D1 + Supabase + Google Sheets with Optimistic Auto-Healing Cache
+// Cloudflare D1 + Google Sheets with Optimistic Auto-Healing Cache
+// (File Upload handled by Cloudflare Worker)
 // ==========================================================================
 
 const WORKER_API_URL = 'https://ict.deaseler.workers.dev';
-const SUPABASE_URL = 'https://mhukujwmlkmrtirrlcmj.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_QCXKvgYZCsC7iKqa_hAV0w_g7wfCj02';
-const SUPABASE_BUCKET = 'calendar-files';
-
 const CACHE_KEY = 'cf_calendar_events_cache';
 
 let currentDate = new Date();
@@ -53,17 +50,18 @@ function initApp() {
   const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
   if (savedPwd) setAdminState(true, savedPwd);
 
-  // 1️⃣ ดึงข้อมูลจากแคชมาแสดงผลทันที (ไม่รอเน็ต)
+  // 1️⃣ โหลดข้อมูลจาก Cache ขึ้นมาแสดงผลก่อนทันที
   loadFromCache();
 
-  // 2️⃣ ดึงข้อมูลจริงเพื่อทำการอัปเดตเบื้องหลัง (Sync)
-  fetchDataForMonth(currentDate.getFullYear(), currentDate.getMonth() + 1);
+  // 2️⃣ ดึงข้อมูลของเดือนตามเวลาจริงของโลก (เพื่อซิงค์ข้อมูลล่าสุด)
+  const realNow = new Date();
+  fetchDataForMonth(realNow.getFullYear(), realNow.getMonth() + 1);
 
   setupDragAndDrop();
 }
 
 /**
- * ⚡ โหลดข้อมูลจาก LocalStorage แสดงบนหน้าเว็บทันที
+ * ⚡ โหลดข้อมูลจาก LocalStorage
  */
 function loadFromCache() {
   const cachedRaw = localStorage.getItem(CACHE_KEY);
@@ -81,7 +79,7 @@ function loadFromCache() {
 }
 
 /**
- * 💾 บันทึกลง LocalStorage และ Re-render หน้าเว็บ (Optimistic Update)
+ * 💾 บันทึกลง LocalStorage และ Re-render (Optimistic Update)
  */
 function updateCacheAndRender(newEvents) {
   events = newEvents;
@@ -90,12 +88,16 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 ดึงข้อมูลจาก Server ตามเงื่อนไขเดือน (D1 สำหรับเดือนปัจจุบัน, Sheets สำหรับเดือนอื่น)
+ * 📡 ดึงข้อมูลจาก Server ตามเงื่อนไข:
+ * - เดือนปัจจุบันตามเวลาจริง = ดึงจาก D1
+ * - เดือนอื่นๆ = ดึงจาก Google Sheets
  */
 function fetchDataForMonth(targetYear, targetMonth) {
-  const now = new Date();
-  const isCurrentMonth = (targetYear === now.getFullYear() && targetMonth === (now.getMonth() + 1));
-  const source = isCurrentMonth ? 'd1' : 'sheets';
+  const realNow = new Date();
+  const isRealCurrentMonth = (targetYear === realNow.getFullYear() && targetMonth === (realNow.getMonth() + 1));
+  
+  // กำหนด Source ตามความจริงของเวลา ไม่ใช่ตามเดือนที่เปิดดูใน UI
+  const source = isRealCurrentMonth ? 'd1' : 'sheets';
   const fetchUrl = `${WORKER_API_URL}?source=${source}&year=${targetYear}&month=${targetMonth}`;
 
   console.log(`[Sync] Fetching month ${targetYear}-${targetMonth} from ${source.toUpperCase()}...`);
@@ -108,28 +110,24 @@ function fetchDataForMonth(targetYear, targetMonth) {
     .then(fetchedData => {
       if (Array.isArray(fetchedData)) {
         replaceCacheForMonth(fetchedData, targetYear, targetMonth);
-        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} server items.`);
+        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} items from ${source.toUpperCase()}.`);
       }
     })
     .catch(err => console.error(`[Sync Error] Failed to fetch data:`, err));
 }
 
 /**
- * 🔄 ล้างข้อมูลเก่าในเดือนที่กำลังแสดงผล และแทนที่ด้วยข้อมูลจาก Server ล้วนๆ (Self-Healing)
+ * 🔄 ล้างข้อมูลเก่าของเดือนที่ดึงมา แล้วแทนที่ด้วยข้อมูลจาก Server
  */
 function replaceCacheForMonth(serverItems, targetYear, targetMonth) {
-  // 1. เก็บรักษาข้อมูลของ "เดือนอื่นๆ" และ "งานที่กำลังรอซิงค์ (Pending)" ไว้
   const preservedEvents = events.filter(evt => {
-    if (evt.isPendingSync) return true; // ป้องกันข้อมูลหายระหว่างที่ผู้ใช้กดเซฟแล้วระบบกำลังอัปโหลด
-
+    if (evt.isPendingSync) return true; // ป้องกันข้อมูลที่กำลังรออัปโหลดสูญหาย
     const d = parseSheetDate(evt['Start Date']);
     if (!d) return false;
     const isTargetMonth = (d.getFullYear() === targetYear && (d.getMonth() + 1) === targetMonth);
-    
-    return !isTargetMonth; // ถ้าเป็นข้อมูลเดือนที่กำลังโหลด ให้ทิ้งไปเลย (เพื่อเอาของ Server มาทับ)
+    return !isTargetMonth; 
   });
 
-  // 2. แปลงฟิลด์จาก Server ให้เป็นฟอร์แมตของแคช
   const mappedServerItems = serverItems.map(item => ({
     ID: item.id || item.ID,
     Title: item.title || item.Title || '',
@@ -143,12 +141,11 @@ function replaceCacheForMonth(serverItems, targetYear, targetMonth) {
     Timestamp: item.created_at || item.timestamp || item.Timestamp || ''
   }));
 
-  // 3. ผสานข้อมูลและบันทึกลงแคช
   updateCacheAndRender([...preservedEvents, ...mappedServerItems]);
 }
 
 // ==========================================================================
-// 🚀 Form Submission Handling (Optimistic UI + Auto Rollback)
+// 🚀 Form Submission Handling (Worker + D1 + FormData)
 // ==========================================================================
 
 function handleFormSubmit(e) {
@@ -174,12 +171,11 @@ function handleFormSubmit(e) {
     return;
   }
 
-  // ⚡ 1. สร้าง Data Object เตรียมแสดงผลทันที
   const finalId = eventId || crypto.randomUUID();
   let tempAttachmentUrl = selectedEvent ? selectedEvent['Attachment URL'] : null;
 
   if (rawSelectedFile) {
-    tempAttachmentUrl = URL.createObjectURL(rawSelectedFile); // สร้าง URL ชั่วคราวให้กดดูไฟล์ก่อนอัปโหลดเสร็จ
+    tempAttachmentUrl = URL.createObjectURL(rawSelectedFile); // Blob URL ไว้ดูชั่วคราวก่อน Worker ตอบกลับ
   } else if (deleteExistingAttachment) {
     tempAttachmentUrl = null;
   }
@@ -195,10 +191,9 @@ function handleFormSubmit(e) {
     President: document.getElementById('form-president-input') ? document.getElementById('form-president-input').value.trim() : '',
     'Attachment URL': tempAttachmentUrl,
     Timestamp: formatToSheetDate(new Date()),
-    isPendingSync: true // 🚩 แฟล็กสำคัญ ป้องกันการโดนดึงข้อมูลอัตโนมัติลบทิ้งระหว่างทำงาน
+    isPendingSync: true
   };
 
-  // ⚡ 2. อัปเดต Cache และเปลี่ยน UI ทันที (Optimistic Update)
   const originalEventData = isEditMode ? events.find(e => String(e.ID) === String(finalId)) : null;
   
   let updatedEvents = [...events];
@@ -210,62 +205,54 @@ function handleFormSubmit(e) {
   
   updateCacheAndRender(updatedEvents);
   closeFormModal();
-  showToast(isEditMode ? 'แก้ไขข้อมูลในหน้าเว็บแล้ว กำลังซิงค์เบื้องหลัง...' : 'บันทึกข้อมูลลงหน้าเว็บแล้ว กำลังซิงค์เบื้องหลัง...', 'success');
+  showToast(isEditMode ? 'แก้ไขข้อมูลในหน้าเว็บแล้ว กำลังส่งไปประมวลผล...' : 'บันทึกข้อมูลหน้าเว็บแล้ว กำลังส่งไปประมวลผล...', 'success');
 
-  // 📡 3. ส่งข้อมูลจริงไปประมวลผลเบื้องหลัง
   processBackgroundSave(newEventData, rawSelectedFile, deleteExistingAttachment, originalEventData);
 }
 
 /**
- * ☁️ การทำงานเบื้องหลัง: อัปโหลดไฟล์ + POST เข้า Server (พร้อมระบบ Rollback)
+ * ☁️ การทำงานเบื้องหลัง: ส่งข้อมูลเป็น FormData ไปให้ Worker จัดการ Supabase และ D1
  */
 async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, originalEventData) {
-  let finalFileUrl = eventData['Attachment URL'];
-
   try {
-    // 1. อัปโหลดเข้า Supabase ถ้ามีไฟล์
-    if (fileToUpload) {
-      finalFileUrl = await uploadToSupabase(fileToUpload);
-      // อัปเดตแคชด้วย URL จริง
-      eventData['Attachment URL'] = finalFileUrl;
-      const updatedEvents = events.map(evt => String(evt.ID) === String(eventData.ID) ? { ...evt, 'Attachment URL': finalFileUrl } : evt);
-      updateCacheAndRender(updatedEvents);
-    } else if (isDeleteFile) {
-      finalFileUrl = null;
-    }
+    const formData = new FormData();
+    formData.append('id', String(eventData.ID));
+    formData.append('title', eventData.Title);
+    formData.append('start_date', eventData['Start Date']);
+    formData.append('end_date', eventData['End Date']);
+    formData.append('categories', eventData.Categories);
+    formData.append('description', eventData.Description || '');
+    formData.append('coordinator', eventData.Coordinator || '');
+    formData.append('president', eventData.President || '');
 
-    // 2. จัดเตรียมข้อมูลส่งไป Cloudflare D1
-    const payload = {
-      id: String(eventData.ID),
-      title: eventData.Title,
-      start_date: eventData['Start Date'],
-      end_date: eventData['End Date'],
-      categories: eventData.Categories,
-      description: eventData.Description || '',
-      coordinator: eventData.Coordinator || '',
-      president: eventData.President || '',
-      file_url: finalFileUrl || ''
-    };
+    // แนบไฟล์ หรือส่งสถานะการลบไฟล์ ให้ Worker ไปจัดการต่อ
+    if (fileToUpload) {
+      formData.append('file', fileToUpload);
+    } else if (isDeleteFile) {
+      formData.append('delete_file', 'true');
+    } else if (eventData['Attachment URL'] && !eventData['Attachment URL'].startsWith('blob:')) {
+      // ส่ง URL เดิมไปด้วยเผื่อ Worker ต้องใช้
+      formData.append('file_url', eventData['Attachment URL']);
+    }
 
     const res = await fetch(`${WORKER_API_URL}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: formData // บราวเซอร์จะใส่ Content-Type: multipart/form-data ให้เอง
     });
 
     if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
     const result = await res.json();
     
-    // ตรวจสอบสถานะการบันทึกจากฝั่ง API
     if (!result.success && !result.id) throw new Error('API indicated database insertion failed');
 
-    console.log(`[Background Sync] Successfully saved ID: ${eventData.ID} to server.`);
-    showToast('ซิงค์ข้อมูลไปยังฐานข้อมูลสำเร็จ', 'success');
+    console.log(`[Worker Sync] Successfully processed ID: ${eventData.ID}`);
+    showToast('ประมวลผลข้อมูลและไฟล์สำเร็จ', 'success');
 
-    // ลบสถานะ Pending ออก เพราะปลอดภัยแล้ว
+    // ลบสถานะ Pending และอัปเดต URL จริงที่ได้จาก Worker (ถ้า Worker ส่ง file_url กลับมา)
     const finalEvents = events.map(evt => {
       if (String(evt.ID) === String(eventData.ID)) {
         const { isPendingSync, ...cleanEvt } = evt;
+        if (result.file_url) cleanEvt['Attachment URL'] = result.file_url;
         return cleanEvt;
       }
       return evt;
@@ -273,16 +260,13 @@ async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, orig
     updateCacheAndRender(finalEvents);
 
   } catch (err) {
-    // 🚨 3. ระบบ Auto-Rollback: เมื่อเกิดข้อผิดพลาดในการส่งเข้า Server
-    console.error(`[Background Sync Failed]`, err);
-    showToast('เซิร์ฟเวอร์ขัดข้อง ไม่สามารถบันทึกข้อมูลได้! กำลังคืนค่าเดิม...', 'error');
+    console.error(`[Worker Sync Failed]`, err);
+    showToast('เซิร์ฟเวอร์ขัดข้อง ไม่สามารถประมวลผลได้! กำลังคืนค่าเดิม...', 'error');
 
     let rolledBackEvents;
     if (originalEventData) {
-      // โหมดแก้ไข: คืนค่าเดิม
       rolledBackEvents = events.map(evt => String(evt.ID) === String(eventData.ID) ? originalEventData : evt);
     } else {
-      // โหมดเพิ่มใหม่: ลบรายการผี (Ghost Data) ทิ้ง
       rolledBackEvents = events.filter(evt => String(evt.ID) !== String(eventData.ID));
     }
     updateCacheAndRender(rolledBackEvents);
@@ -290,7 +274,7 @@ async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, orig
 }
 
 /**
- * 🗑️ การลบข้อมูล (Optimistic Delete + Background Sync + Rollback)
+ * 🗑️ การลบข้อมูล (เรียกไปที่ Worker ตัวเดียวจบ)
  */
 function triggerDeleteEvent() {
   if (!selectedEvent) return;
@@ -300,50 +284,25 @@ function triggerDeleteEvent() {
   const deletedEventData = { ...selectedEvent };
   closeDetailModal();
 
-  // ⚡ 1. ลบออกจากหน้าเว็บทันที
   const updatedEvents = events.filter(evt => String(evt.ID) !== String(targetId));
   updateCacheAndRender(updatedEvents);
-  showToast('ลบรายการเรียบร้อยแล้ว กำลังซิงค์เบื้องหลัง...', 'success');
+  showToast('ลบรายการหน้าเว็บแล้ว กำลังสั่งลบที่เซิร์ฟเวอร์...', 'success');
 
-  // 📡 2. ลบจาก Server เบื้องหลัง
   fetch(`${WORKER_API_URL}?id=${targetId}`, { method: 'DELETE' })
     .then(res => {
       if (!res.ok) throw new Error('Network response was not ok');
       return res.json();
     })
     .then(resData => {
-      console.log(`[Background Delete] Success:`, resData);
-      showToast('ซิงค์การลบข้อมูลสำเร็จ', 'success');
+      console.log(`[Worker Delete] Success:`, resData);
+      showToast('ลบข้อมูลที่เซิร์ฟเวอร์สำเร็จ', 'success');
     })
     .catch(err => {
-      console.error(`[Background Delete Error]:`, err);
-      // 🚨 Rollback กลับมาแสดงใหม่ถ้าลบไม่สำเร็จ
+      console.error(`[Worker Delete Error]:`, err);
       showToast('เซิร์ฟเวอร์ขัดข้อง ไม่สามารถลบข้อมูลได้! กำลังกู้คืน...', 'error');
       const rollbackEvents = [...events, deletedEventData];
       updateCacheAndRender(rollbackEvents);
     });
-}
-
-/**
- * ☁️ Supabase Direct Upload Helper
- */
-async function uploadToSupabase(file) {
-  const fileExt = file.name.split('.').pop();
-  const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
-  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${fileName}`;
-
-  const res = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
-      'apikey': SUPABASE_PUBLISHABLE_KEY,
-      'Content-Type': file.type
-    },
-    body: file
-  });
-
-  if (!res.ok) throw new Error('Supabase Storage Error');
-  return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${fileName}`;
 }
 
 // ==========================================================================
@@ -465,7 +424,7 @@ function navigateCalendar(direction) {
     currentDate.setDate(currentDate.getDate() + (direction * 7));
   }
   
-  // ซิงค์ข้อมูลใหม่เมื่อเปลี่ยนเดือน
+  // ซิงค์ข้อมูลใหม่เมื่อเปลี่ยนเดือน (Worker จะรับรู้ว่าต้องดึงจาก Sheets หรือ D1)
   fetchDataForMonth(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
@@ -564,7 +523,6 @@ function createDayCell(container, dayNumber, dateObj, isOtherMonth, isToday) {
     const chip = document.createElement('div');
     chip.className = 'event-chip';
     
-    // หากข้อมูลยัง Pending การอัปโหลด ให้ใส่เอฟเฟกต์สีจางๆ
     if (evt.isPendingSync) chip.style.opacity = '0.6';
 
     const categoriesList = evt.Categories ? evt.Categories.split(',').map(c => c.trim()) : [];
