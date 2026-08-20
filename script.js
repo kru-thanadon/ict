@@ -313,9 +313,11 @@ async function handleFormSubmit(e) {
     uploadedFileUrl = null;
   }
 
-  const tempId = 'TEMP-' + Date.now();
+  // 💡 สร้าง UUID เดียวใช้งานตลอดกระบวนการ ห้ามติด TEMP-
+  const finalId = eventId || crypto.randomUUID();
+
   const eventData = {
-    ID: eventId || tempId,
+    ID: finalId,
     Title: document.getElementById('form-title-input').value.trim(),
     'Start Date': formatToSheetDate(startDateObj),
     'End Date': formatToSheetDate(endDateObj),
@@ -340,7 +342,9 @@ async function handleFormSubmit(e) {
   updateCacheAndRender(updatedEvents);
   showToast(eventId ? 'แก้ไขข้อมูลเรียบร้อยแล้ว' : 'บันทึกข้อมูลเรียบร้อยแล้ว', 'success');
 
+  // 💡 แนบ id เดียวกันนี้ไปให้ D1 เสมอ
   const payload = {
+    id: finalId,
     title: eventData.Title,
     start_date: eventData['Start Date'],
     end_date: eventData['End Date'],
@@ -350,10 +354,6 @@ async function handleFormSubmit(e) {
     president: eventData.President || '',
     file_url: uploadedFileUrl || ''
   };
-
-  if (eventId && !String(eventId).startsWith('TEMP-')) {
-    payload.id = eventId; 
-  }
 
   fetch(`${WORKER_API_URL}`, {
     method: 'POST',
@@ -624,7 +624,6 @@ function navigateCalendar(direction) {
     currentDate.setDate(currentDate.getDate() + (direction * 7));
   }
   
-  // สั่งแอบดึงข้อมูลของเดือนที่ผู้ใช้เพิ่งกดเปลี่ยนไปเบื้องหลัง
   fetchColdMonthsData(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
