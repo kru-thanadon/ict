@@ -53,7 +53,7 @@ function initApp() {
   // 1️⃣ โหลดข้อมูลจาก Cache ขึ้นมาแสดงผลก่อนทันที
   loadFromCache();
 
-  // 2️⃣ ดึงข้อมูลของเดือนตามเวลาจริงของโลก (เพื่อซิงค์ข้อมูลล่าสุด)
+  // 2️⃣ ดึงข้อมูลของเดือนตามเวลาจริง (Worker จะตัดสินใจเลือก D1 หรือ GAS ให้อัตโนมัติ)
   const realNow = new Date();
   fetchDataForMonth(realNow.getFullYear(), realNow.getMonth() + 1);
 
@@ -88,19 +88,12 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 ดึงข้อมูลจาก Server ตามเงื่อนไข:
- * - เดือนปัจจุบันตามเวลาจริง = ดึงจาก D1
- * - เดือนอื่นๆ = ดึงจาก Google Sheets
+ * 📡 ดึงข้อมูลจาก Worker ตามปีและเดือนที่ต้องการ
  */
 function fetchDataForMonth(targetYear, targetMonth) {
-  const realNow = new Date();
-  const isRealCurrentMonth = (targetYear === realNow.getFullYear() && targetMonth === (realNow.getMonth() + 1));
-  
-  // กำหนด Source ตามความจริงของเวลา ไม่ใช่ตามเดือนที่เปิดดูใน UI
-  const source = isRealCurrentMonth ? 'd1' : 'sheets';
-  const fetchUrl = `${WORKER_API_URL}?source=${source}&year=${targetYear}&month=${targetMonth}`;
+  const fetchUrl = `${WORKER_API_URL}?year=${targetYear}&month=${targetMonth}`;
 
-  console.log(`[Sync] Fetching month ${targetYear}-${targetMonth} from ${source.toUpperCase()}...`);
+  console.log(`[Sync] Fetching month ${targetYear}-${targetMonth} from Worker...`);
 
   fetch(fetchUrl)
     .then(res => {
@@ -110,7 +103,7 @@ function fetchDataForMonth(targetYear, targetMonth) {
     .then(fetchedData => {
       if (Array.isArray(fetchedData)) {
         replaceCacheForMonth(fetchedData, targetYear, targetMonth);
-        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} items from ${source.toUpperCase()}.`);
+        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} items.`);
       }
     })
     .catch(err => console.error(`[Sync Error] Failed to fetch data:`, err));
@@ -211,7 +204,7 @@ function handleFormSubmit(e) {
 }
 
 /**
- * ☁️ การทำงานเบื้องหลัง: ส่งข้อมูลเป็น FormData ไปให้ Worker จัดการ Supabase และ D1
+ * ☁️ การทำงานเบื้องหลัง: ส่งข้อมูลเป็น FormData ไปให้ Worker จัดการ Supabase, D1, KV และ GAS
  */
 async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, originalEventData) {
   try {
@@ -225,19 +218,17 @@ async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, orig
     formData.append('coordinator', eventData.Coordinator || '');
     formData.append('president', eventData.President || '');
 
-    // แนบไฟล์ หรือส่งสถานะการลบไฟล์ ให้ Worker ไปจัดการต่อ
     if (fileToUpload) {
       formData.append('file', fileToUpload);
     } else if (isDeleteFile) {
       formData.append('delete_file', 'true');
     } else if (eventData['Attachment URL'] && !eventData['Attachment URL'].startsWith('blob:')) {
-      // ส่ง URL เดิมไปด้วยเผื่อ Worker ต้องใช้
       formData.append('file_url', eventData['Attachment URL']);
     }
 
     const res = await fetch(`${WORKER_API_URL}`, {
       method: 'POST',
-      body: formData // บราวเซอร์จะใส่ Content-Type: multipart/form-data ให้เอง
+      body: formData
     });
 
     if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
@@ -248,11 +239,12 @@ async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, orig
     console.log(`[Worker Sync] Successfully processed ID: ${eventData.ID}`);
     showToast('ประมวลผลข้อมูลและไฟล์สำเร็จ', 'success');
 
-    // ลบสถานะ Pending และอัปเดต URL จริงที่ได้จาก Worker (ถ้า Worker ส่ง file_url กลับมา)
+    // ลบสถานะ Pending และอัปเดต URL จริงที่ได้จาก Worker
     const finalEvents = events.map(evt => {
       if (String(evt.ID) === String(eventData.ID)) {
         const { isPendingSync, ...cleanEvt } = evt;
         if (result.file_url) cleanEvt['Attachment URL'] = result.file_url;
+        else if (isDeleteFile) cleanEvt['Attachment URL'] = '';
         return cleanEvt;
       }
       return evt;
@@ -274,7 +266,7 @@ async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, orig
 }
 
 /**
- * 🗑️ การลบข้อมูล (เรียกไปที่ Worker ตัวเดียวจบ)
+ * 🗑️ การลบข้อมูล (ส่ง Request ลบไปที่ Worker)
  */
 function triggerDeleteEvent() {
   if (!selectedEvent) return;
@@ -424,7 +416,6 @@ function navigateCalendar(direction) {
     currentDate.setDate(currentDate.getDate() + (direction * 7));
   }
   
-  // ซิงค์ข้อมูลใหม่เมื่อเปลี่ยนเดือน (Worker จะรับรู้ว่าต้องดึงจาก Sheets หรือ D1)
   fetchDataForMonth(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
@@ -685,6 +676,7 @@ function handleFileSelection(event) {
   }
   
   rawSelectedFile = file;
+  deleteExistingAttachment = false;
   document.getElementById('selected-file-name').innerText = file.name;
   document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
   document.getElementById('selected-file-display').classList.remove('hidden');
@@ -693,6 +685,7 @@ function handleFileSelection(event) {
 
 function clearFileSelection() {
   rawSelectedFile = null;
+  deleteExistingAttachment = true;
   if (document.getElementById('form-file-input')) document.getElementById('form-file-input').value = '';
   if (document.getElementById('selected-file-display')) document.getElementById('selected-file-display').classList.add('hidden');
   if (document.querySelector('.dropzone-prompt')) document.querySelector('.dropzone-prompt').classList.remove('hidden');
