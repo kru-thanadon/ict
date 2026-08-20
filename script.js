@@ -1,10 +1,10 @@
 // ========================================================================== 
-// External Website Calendar JS Engine (Dual-Sync Parallel Architecture)
-// Direct Dispatch to Cloudflare Worker (D1+Supabase) & GAS (Sheets+Drive+LINE)
+// External Website Calendar JS Engine
+// Cloudflare D1 + Google Sheets with Optimistic Auto-Healing Cache
+// (File Upload handled by Cloudflare Worker)
 // ==========================================================================
 
 const WORKER_API_URL = 'https://ict.deaseler.workers.dev';
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwty3Nw6qGs6PIgyrhNT50bpKlkp9LHf7lFLUgzuizl4jGeG0YxhmQXBf9cnQ7AO3aU/exec'; // ⚠️ เปลี่ยนเป็น Web App URL ของ Google Apps Script คุณ
 const CACHE_KEY = 'cf_calendar_events_cache';
 
 let currentDate = new Date();
@@ -50,10 +50,10 @@ function initApp() {
   const savedPwd = localStorage.getItem('gas_calendar_admin_pwd') || '';
   if (savedPwd) setAdminState(true, savedPwd);
 
-  // 1️⃣ โหลดข้อมูลจาก LocalStorage แสดงผลลื่นไหลทันที
+  // 1️⃣ โหลดข้อมูลจาก Cache ขึ้นมาแสดงผลก่อนทันที
   loadFromCache();
 
-  // 2️⃣ ดึงข้อมูลเวลาจริงสำหรับเดือนปัจจุบัน
+  // 2️⃣ ดึงข้อมูลของเดือนตามเวลาจริงของโลก (เพื่อซิงค์ข้อมูลล่าสุด)
   const realNow = new Date();
   fetchDataForMonth(realNow.getFullYear(), realNow.getMonth() + 1);
 
@@ -79,7 +79,7 @@ function loadFromCache() {
 }
 
 /**
- * 💾 บันทึกลง LocalStorage และ Re-render (Optimistic UI)
+ * 💾 บันทึกลง LocalStorage และ Re-render (Optimistic Update)
  */
 function updateCacheAndRender(newEvents) {
   events = newEvents;
@@ -88,11 +88,19 @@ function updateCacheAndRender(newEvents) {
 }
 
 /**
- * 📡 ดึงข้อมูลตามปีและเดือนที่ต้องการ (ดึงผ่าน Worker เป็นหลัก)
+ * 📡 ดึงข้อมูลจาก Server ตามเงื่อนไข:
+ * - เดือนปัจจุบันตามเวลาจริง = ดึงจาก D1
+ * - เดือนอื่นๆ = ดึงจาก Google Sheets
  */
 function fetchDataForMonth(targetYear, targetMonth) {
-  const fetchUrl = `${WORKER_API_URL}?year=${targetYear}&month=${targetMonth}`;
-  console.log(`[Sync] Fetching month ${targetYear}-${targetMonth} from Worker...`);
+  const realNow = new Date();
+  const isRealCurrentMonth = (targetYear === realNow.getFullYear() && targetMonth === (realNow.getMonth() + 1));
+  
+  // กำหนด Source ตามความจริงของเวลา ไม่ใช่ตามเดือนที่เปิดดูใน UI
+  const source = isRealCurrentMonth ? 'd1' : 'sheets';
+  const fetchUrl = `${WORKER_API_URL}?source=${source}&year=${targetYear}&month=${targetMonth}`;
+
+  console.log(`[Sync] Fetching month ${targetYear}-${targetMonth} from ${source.toUpperCase()}...`);
 
   fetch(fetchUrl)
     .then(res => {
@@ -102,19 +110,10 @@ function fetchDataForMonth(targetYear, targetMonth) {
     .then(fetchedData => {
       if (Array.isArray(fetchedData)) {
         replaceCacheForMonth(fetchedData, targetYear, targetMonth);
-        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} items.`);
+        console.log(`[Sync Success] Replaced cache for ${targetYear}-${targetMonth} with ${fetchedData.length} items from ${source.toUpperCase()}.`);
       }
     })
-    .catch(err => {
-      console.error(`[Worker Fetch Error] Fallback to GAS fetch:`, err);
-      // Fallback ไปดึงที่ GAS หาก Worker มีปัญหา
-      fetch(`${GAS_API_URL}?year=${targetYear}&month=${targetMonth}`)
-        .then(res => res.json())
-        .then(gasData => {
-          if (Array.isArray(gasData)) replaceCacheForMonth(gasData, targetYear, targetMonth);
-        })
-        .catch(gasErr => console.error(`[GAS Fetch Error]:`, gasErr));
-    });
+    .catch(err => console.error(`[Sync Error] Failed to fetch data:`, err));
 }
 
 /**
@@ -122,7 +121,7 @@ function fetchDataForMonth(targetYear, targetMonth) {
  */
 function replaceCacheForMonth(serverItems, targetYear, targetMonth) {
   const preservedEvents = events.filter(evt => {
-    if (evt.isPendingSync) return true;
+    if (evt.isPendingSync) return true; // ป้องกันข้อมูลที่กำลังรออัปโหลดสูญหาย
     const d = parseSheetDate(evt['Start Date']);
     if (!d) return false;
     const isTargetMonth = (d.getFullYear() === targetYear && (d.getMonth() + 1) === targetMonth);
@@ -146,76 +145,10 @@ function replaceCacheForMonth(serverItems, targetYear, targetMonth) {
 }
 
 // ==========================================================================
-// ⚡ DUAL API DISPATCHERS (WORKER vs GAS)
+// 🚀 Form Submission Handling (Worker + D1 + FormData)
 // ==========================================================================
 
-/**
- * [สายที่ 1] บันทึกไป Cloudflare Worker (D1 + Supabase Storage)
- */
-async function saveToWorker(formData) {
-  console.log('🚀 [Worker Sync] Dispatching to Worker...');
-  const res = await fetch(`${WORKER_API_URL}`, {
-    method: 'POST',
-    body: formData
-  });
-  if (!res.ok) throw new Error(`Worker HTTP ${res.status}`);
-  return await res.json();
-}
-
-/**
- * [สายที่ 2] บันทึกไป Google Apps Script (Google Sheets + Drive + LINE)
- */
-async function saveToGAS(gasPayload) {
-  console.log('🚀 [GAS Sync] Dispatching to Google Apps Script...');
-  const res = await fetch(`${GAS_API_URL}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // ใช้ text/plain เลี่ยงปัญหา CORS Preflight ใน GAS
-    body: JSON.stringify(gasPayload),
-    redirect: 'follow'
-  });
-  if (!res.ok) throw new Error(`GAS HTTP ${res.status}`);
-  return await res.json();
-}
-
-/**
- * [สายที่ 1] สั่งลบข้อมูลที่ Cloudflare Worker
- */
-async function deleteFromWorker(id) {
-  console.log(`🚀 [Worker Delete] Deleting ID: ${id}`);
-  const res = await fetch(`${WORKER_API_URL}?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Worker Delete HTTP ${res.status}`);
-  return await res.json();
-}
-
-/**
- * [สายที่ 2] สั่งลบข้อมูลที่ Google Apps Script
- */
-async function deleteFromGAS(id) {
-  console.log(`🚀 [GAS Delete] Deleting ID: ${id}`);
-  const res = await fetch(`${GAS_API_URL}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'delete', id: id }),
-    redirect: 'follow'
-  });
-  if (!res.ok) throw new Error(`GAS Delete HTTP ${res.status}`);
-  return await res.json();
-}
-
-function convertFileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = error => reject(error);
-  });
-}
-
-// ==========================================================================
-// 🚀 Form Submission Handling (Parallel Execution)
-// ==========================================================================
-
-async function handleFormSubmit(e) {
+function handleFormSubmit(e) {
   e.preventDefault();
   
   const eventId = document.getElementById('form-event-id').value;
@@ -242,7 +175,7 @@ async function handleFormSubmit(e) {
   let tempAttachmentUrl = selectedEvent ? selectedEvent['Attachment URL'] : null;
 
   if (rawSelectedFile) {
-    tempAttachmentUrl = URL.createObjectURL(rawSelectedFile);
+    tempAttachmentUrl = URL.createObjectURL(rawSelectedFile); // Blob URL ไว้ดูชั่วคราวก่อน Worker ตอบกลับ
   } else if (deleteExistingAttachment) {
     tempAttachmentUrl = null;
   }
@@ -270,96 +203,80 @@ async function handleFormSubmit(e) {
     updatedEvents.push(newEventData);
   }
   
-  // 1. Optimistic UI Update
   updateCacheAndRender(updatedEvents);
   closeFormModal();
-  showToast(isEditMode ? 'แก้ไขข้อมูลสำเร็จ (กำลังบันทึกไปยังเซิร์ฟเวอร์...)' : 'เพิ่มกิจกรรมสำเร็จ (กำลังบันทึกไปยังเซิร์ฟเวอร์...) ' , 'success');
+  showToast(isEditMode ? 'แก้ไขข้อมูลในหน้าเว็บแล้ว กำลังส่งไปประมวลผล...' : 'บันทึกข้อมูลหน้าเว็บแล้ว กำลังส่งไปประมวลผล...', 'success');
 
-  // 2. จัดเตรียม Data สำหรับ Worker (FormData)
-  const workerFormData = new FormData();
-  workerFormData.append('id', String(newEventData.ID));
-  workerFormData.append('title', newEventData.Title);
-  workerFormData.append('start_date', newEventData['Start Date']);
-  workerFormData.append('end_date', newEventData['End Date']);
-  workerFormData.append('categories', newEventData.Categories);
-  workerFormData.append('description', newEventData.Description || '');
-  workerFormData.append('coordinator', newEventData.Coordinator || '');
-  workerFormData.append('president', newEventData.President || '');
+  processBackgroundSave(newEventData, rawSelectedFile, deleteExistingAttachment, originalEventData);
+}
 
-  if (rawSelectedFile) {
-    workerFormData.append('file', rawSelectedFile);
-  } else if (deleteExistingAttachment) {
-    workerFormData.append('delete_file', 'true');
-  } else if (newEventData['Attachment URL'] && !newEventData['Attachment URL'].startsWith('blob:')) {
-    workerFormData.append('file_url', newEventData['Attachment URL']);
-  }
+/**
+ * ☁️ การทำงานเบื้องหลัง: ส่งข้อมูลเป็น FormData ไปให้ Worker จัดการ Supabase และ D1
+ */
+async function processBackgroundSave(eventData, fileToUpload, isDeleteFile, originalEventData) {
+  try {
+    const formData = new FormData();
+    formData.append('id', String(eventData.ID));
+    formData.append('title', eventData.Title);
+    formData.append('start_date', eventData['Start Date']);
+    formData.append('end_date', eventData['End Date']);
+    formData.append('categories', eventData.Categories);
+    formData.append('description', eventData.Description || '');
+    formData.append('coordinator', eventData.Coordinator || '');
+    formData.append('president', eventData.President || '');
 
-  // 3. จัดเตรียม Data สำหรับ GAS (Payload Object)
-  const gasPayload = {
-    action: isEditMode ? 'update' : 'create',
-    id: String(newEventData.ID),
-    title: newEventData.Title,
-    start_date: newEventData['Start Date'],
-    end_date: newEventData['End Date'],
-    categories: newEventData.Categories,
-    description: newEventData.Description,
-    coordinator: newEventData.Coordinator,
-    president: newEventData.President,
-    delete_file: deleteExistingAttachment
-  };
+    // แนบไฟล์ หรือส่งสถานะการลบไฟล์ ให้ Worker ไปจัดการต่อ
+    if (fileToUpload) {
+      formData.append('file', fileToUpload);
+    } else if (isDeleteFile) {
+      formData.append('delete_file', 'true');
+    } else if (eventData['Attachment URL'] && !eventData['Attachment URL'].startsWith('blob:')) {
+      // ส่ง URL เดิมไปด้วยเผื่อ Worker ต้องใช้
+      formData.append('file_url', eventData['Attachment URL']);
+    }
 
-  if (rawSelectedFile) {
-    gasPayload.file_name = rawSelectedFile.name;
-    gasPayload.file_type = rawSelectedFile.type;
-    gasPayload.file_base64 = await convertFileToBase64(rawSelectedFile);
-  }
+    const res = await fetch(`${WORKER_API_URL}`, {
+      method: 'POST',
+      body: formData // บราวเซอร์จะใส่ Content-Type: multipart/form-data ให้เอง
+    });
 
-  // 4. สั่งบันทึกแบบขนาน 2 สายพร้อมกัน
-  console.log('⚡ Executing Parallel Dual Sync (Worker & GAS)...');
-  
-  const results = await Promise.allSettled([
-    saveToWorker(workerFormData),
-    saveToGAS(gasPayload)
-  ]);
+    if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
+    const result = await res.json();
+    
+    if (!result.success && !result.id) throw new Error('API indicated database insertion failed');
 
-  let workerSuccess = results[0].status === 'fulfilled';
-  let gasSuccess = results[1].status === 'fulfilled';
+    console.log(`[Worker Sync] Successfully processed ID: ${eventData.ID}`);
+    showToast('ประมวลผลข้อมูลและไฟล์สำเร็จ', 'success');
 
-  if (workerSuccess || gasSuccess) {
-    console.log('✅ Dual Sync Completed:', { workerSuccess, gasSuccess });
-    showToast('บันทึกข้อมูลลงฐานข้อมูลสำเร็จแล้ว', 'success');
-
-    // อัปเดต URL จริงและเอาสถานะ Pending ออก
+    // ลบสถานะ Pending และอัปเดต URL จริงที่ได้จาก Worker (ถ้า Worker ส่ง file_url กลับมา)
     const finalEvents = events.map(evt => {
-      if (String(evt.ID) === String(newEventData.ID)) {
+      if (String(evt.ID) === String(eventData.ID)) {
         const { isPendingSync, ...cleanEvt } = evt;
-        if (results[0].status === 'fulfilled' && results[0].value.file_url) {
-          cleanEvt['Attachment URL'] = results[0].value.file_url;
-        }
+        if (result.file_url) cleanEvt['Attachment URL'] = result.file_url;
         return cleanEvt;
       }
       return evt;
     });
     updateCacheAndRender(finalEvents);
-  } else {
-    console.error('❌ Dual Sync Completely Failed:', results);
-    showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูลทั้ง 2 ระบบ! กำลังคืนค่า...', 'error');
-    
-    // Rollback ค่าเดิม
+
+  } catch (err) {
+    console.error(`[Worker Sync Failed]`, err);
+    showToast('เซิร์ฟเวอร์ขัดข้อง ไม่สามารถประมวลผลได้! กำลังคืนค่าเดิม...', 'error');
+
     let rolledBackEvents;
     if (originalEventData) {
-      rolledBackEvents = events.map(evt => String(evt.ID) === String(newEventData.ID) ? originalEventData : evt);
+      rolledBackEvents = events.map(evt => String(evt.ID) === String(eventData.ID) ? originalEventData : evt);
     } else {
-      rolledBackEvents = events.filter(evt => String(evt.ID) !== String(newEventData.ID));
+      rolledBackEvents = events.filter(evt => String(evt.ID) !== String(eventData.ID));
     }
     updateCacheAndRender(rolledBackEvents);
   }
 }
 
 /**
- * 🗑️ การลบข้อมูล ยิงแบบขนาน 2 สายพร้อมกัน
+ * 🗑️ การลบข้อมูล (เรียกไปที่ Worker ตัวเดียวจบ)
  */
-async function triggerDeleteEvent() {
+function triggerDeleteEvent() {
   if (!selectedEvent) return;
   if (!confirm('คุณแน่ใจว่าต้องการลบกิจกรรม "' + selectedEvent.Title + '" ใช่หรือไม่?')) return;
 
@@ -367,29 +284,25 @@ async function triggerDeleteEvent() {
   const deletedEventData = { ...selectedEvent };
   closeDetailModal();
 
-  // 1. Optimistic UI Update
   const updatedEvents = events.filter(evt => String(evt.ID) !== String(targetId));
   updateCacheAndRender(updatedEvents);
-  showToast('ลบรายการบนหน้าเว็บแล้ว กำลังส่งคำสั่งลบไปยังระบบ...', 'info');
+  showToast('ลบรายการหน้าเว็บแล้ว กำลังสั่งลบที่เซิร์ฟเวอร์...', 'success');
 
-  // 2. สั่งลบแบบขนาน 2 สาย
-  const results = await Promise.allSettled([
-    deleteFromWorker(targetId),
-    deleteFromGAS(targetId)
-  ]);
-
-  let workerDeleted = results[0].status === 'fulfilled';
-  let gasDeleted = results[1].status === 'fulfilled';
-
-  if (workerDeleted || gasDeleted) {
-    console.log('✅ Dual Delete Completed:', { workerDeleted, gasDeleted });
-    showToast('ลบรายการจากระบบฐานข้อมูลเรียบร้อยแล้ว', 'success');
-  } else {
-    console.error('❌ Dual Delete Failed:', results);
-    showToast('ไม่สามารถลบข้อมูลจากระบบได้! กำลังกู้คืน...', 'error');
-    const rollbackEvents = [...events, deletedEventData];
-    updateCacheAndRender(rollbackEvents);
-  }
+  fetch(`${WORKER_API_URL}?id=${targetId}`, { method: 'DELETE' })
+    .then(res => {
+      if (!res.ok) throw new Error('Network response was not ok');
+      return res.json();
+    })
+    .then(resData => {
+      console.log(`[Worker Delete] Success:`, resData);
+      showToast('ลบข้อมูลที่เซิร์ฟเวอร์สำเร็จ', 'success');
+    })
+    .catch(err => {
+      console.error(`[Worker Delete Error]:`, err);
+      showToast('เซิร์ฟเวอร์ขัดข้อง ไม่สามารถลบข้อมูลได้! กำลังกู้คืน...', 'error');
+      const rollbackEvents = [...events, deletedEventData];
+      updateCacheAndRender(rollbackEvents);
+    });
 }
 
 // ==========================================================================
@@ -511,6 +424,7 @@ function navigateCalendar(direction) {
     currentDate.setDate(currentDate.getDate() + (direction * 7));
   }
   
+  // ซิงค์ข้อมูลใหม่เมื่อเปลี่ยนเดือน (Worker จะรับรู้ว่าต้องดึงจาก Sheets หรือ D1)
   fetchDataForMonth(currentDate.getFullYear(), currentDate.getMonth() + 1);
   renderCalendar();
 }
@@ -771,7 +685,6 @@ function handleFileSelection(event) {
   }
   
   rawSelectedFile = file;
-  deleteExistingAttachment = false;
   document.getElementById('selected-file-name').innerText = file.name;
   document.getElementById('selected-file-size').innerText = (file.size / 1024).toFixed(1) + ' KB';
   document.getElementById('selected-file-display').classList.remove('hidden');
@@ -780,7 +693,6 @@ function handleFileSelection(event) {
 
 function clearFileSelection() {
   rawSelectedFile = null;
-  deleteExistingAttachment = true;
   if (document.getElementById('form-file-input')) document.getElementById('form-file-input').value = '';
   if (document.getElementById('selected-file-display')) document.getElementById('selected-file-display').classList.add('hidden');
   if (document.querySelector('.dropzone-prompt')) document.querySelector('.dropzone-prompt').classList.remove('hidden');
@@ -788,22 +700,17 @@ function clearFileSelection() {
 
 function setupDragAndDrop() {
   const dropzone = document.getElementById('upload-dropzone');
-  const fileInput = document.getElementById('form-file-input');
-  if (!dropzone || !fileInput) return;
-
+  if (!dropzone) return;
   dropzone.addEventListener('click', (e) => {
-    if (e.target !== fileInput && !e.target.closest('.btn-clear-selection')) {
-      fileInput.click();
-    }
+    if (!e.target.closest('.btn-clear-selection')) document.getElementById('form-file-input').click();
   });
-
   dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
   dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropzone.classList.remove('dragover');
     if (e.dataTransfer.files.length > 0) {
-      fileInput.files = e.dataTransfer.files;
+      document.getElementById('form-file-input').files = e.dataTransfer.files;
       handleFileSelection({ target: { files: e.dataTransfer.files } });
     }
   });
